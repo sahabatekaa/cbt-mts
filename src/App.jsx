@@ -1,7 +1,42 @@
 import React, { useState, useEffect } from 'react';
-import { Clock, CheckCircle, XCircle, Users, BookOpen, PlusCircle, LogOut, ArrowRight, ArrowLeft, Play, LayoutDashboard, Printer } from 'lucide-react';
+import { Clock, CheckCircle, XCircle, Users, BookOpen, PlusCircle, LogOut, ArrowRight, ArrowLeft, Play, LayoutDashboard, Printer, AlertTriangle } from 'lucide-react';
+import { initializeApp } from "firebase/app";
+import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from "firebase/auth";
+import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot } from "firebase/firestore";
 
-// --- DATA AWAL SOAL (20 Soal - Isim Mausul & Kata Perintah) ---
+// --- 1. KONFIGURASI DATABASE FIREBASE (GRATIS) ---
+// ⚠️ UNTUK GURU: Ganti isi variabel di bawah ini dengan config dari akun Firebase Anda (Langkah 3 di Panduan).
+const myFirebaseConfig = {
+    apiKey: "AIzaSyAfR-SMXxIVf50uCqlrIyer5nJkHxtsna8",
+    authDomain: "cbt-mts.firebaseapp.com",
+    projectId: "cbt-mts",
+    storageBucket: "cbt-mts.firebasestorage.app",
+    messagingSenderId: "485346087484",
+    appId: "1:485346087484:web:a3cdb682cd4489f8e2e939",
+    measurementId: "G-3Q9ZH01D52"
+};
+
+// Sistem deteksi otomatis lingkungan Vercel / Lokal
+const isCanvas = typeof __firebase_config !== 'undefined';
+let app, auth, db, appId;
+
+if (isCanvas) {
+  // Lingkungan uji coba otomatis
+  app = initializeApp(JSON.parse(__firebase_config));
+  auth = getAuth(app);
+  db = getFirestore(app);
+  appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+} else if (myFirebaseConfig.apiKey) {
+  // Lingkungan Vercel asli milik Anda
+  app = initializeApp(myFirebaseConfig);
+  auth = getAuth(app);
+  db = getFirestore(app);
+  appId = "cbt-mts-app-public"; 
+}
+
+const isDbReady = !!db;
+
+// --- 2. DATA SOAL UJIAN (Bisa ditambah/diubah) ---
 const INITIAL_QUESTIONS = [
   { id: 1, text: "Kata yang bermakna 'Yang' untuk laki-laki tunggal (Isim Mausul) adalah...", options: ["Alladzi (الَّذِي)", "Allati (الَّتِي)", "Anta (أَنْتَ)", "Huwa (هُوَ)"], answer: 0 },
   { id: 2, text: "Kata yang bermakna 'Yang' untuk perempuan tunggal (Isim Mausul) adalah...", options: ["Alladzi (الَّذِي)", "Allati (الَّتِي)", "Hiya (هِيَ)", "Nahnu (نَحْنُ)"], answer: 1 },
@@ -36,15 +71,81 @@ export default function App() {
   const [questions, setQuestions] = useState(INITIAL_QUESTIONS);
   const [results, setResults] = useState([]);
   const [activeStudents, setActiveStudents] = useState([]);
-  
-  // Data Siswa yang sedang login
-  const [currentStudent, setCurrentStudent] = useState({ id: null, name: '' });
+  const [user, setUser] = useState(null);
 
-  // --- KOMPONEN: LAYAR UTAMA (Pilih Peran) ---
+  // --- FITUR ANTI REFRESH (Menyimpan setiap ada perubahan ke memori browser) ---
+  useEffect(() => {
+    localStorage.setItem('cbt_view', view);
+    localStorage.setItem('cbt_student', JSON.stringify(currentStudent));
+    localStorage.setItem('cbt_answers', JSON.stringify(answers));
+    localStorage.setItem('cbt_timeLeft', timeLeft.toString());
+    localStorage.setItem('cbt_currentIndex', currentIndex.toString());
+  }, [view, currentStudent, answers, timeLeft, currentIndex]);
+
+  // Fungsi untuk membersihkan memori (Saat logout atau selesai ujian agar HP bisa dipakai siswa lain)
+  const clearSession = () => {
+    localStorage.removeItem('cbt_view');
+    localStorage.removeItem('cbt_student');
+    localStorage.removeItem('cbt_answers');
+    localStorage.removeItem('cbt_timeLeft');
+    localStorage.removeItem('cbt_currentIndex');
+    
+    setCurrentStudent({ id: null, name: '' });
+    setAnswers({});
+    setTimeLeft(3600); // Reset ke 60 Menit
+    setCurrentIndex(0);
+    setView('home');
+  };
+
+  // --- KONEKSI KE FIREBASE DATABASE ---
+  useEffect(() => {
+    if (!isDbReady) return;
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch(e) { console.error("Gagal konek auth Firebase", e); }
+    };
+    initAuth();
+    
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  // Tarik Data Realtime (Khusus Guru memantau & Siswa terhubung)
+  useEffect(() => {
+    if (!isDbReady || !user) return;
+
+    // Pantau siswa aktif (Sedang Mengerjakan)
+    const activeRef = collection(db, 'artifacts', appId, 'public', 'data', 'active_students');
+    const unsubActive = onSnapshot(activeRef, (snapshot) => {
+      const students = snapshot.docs.map(doc => doc.data());
+      setActiveStudents(students);
+    }, (error) => console.error(error));
+
+    // Pantau Hasil Ujian (Selesai Mengerjakan)
+    const resultsRef = collection(db, 'artifacts', appId, 'public', 'data', 'quiz_results');
+    const unsubResults = onSnapshot(resultsRef, (snapshot) => {
+      const res = snapshot.docs.map(doc => doc.data());
+      setResults(res);
+    }, (error) => console.error(error));
+
+    return () => {
+      unsubActive();
+      unsubResults();
+    };
+  }, [user]);
+
+  // ==========================================================
+  // KOMPONEN 1: LAYAR UTAMA
+  // ==========================================================
   const HomeView = () => {
     const [secretClicks, setSecretClicks] = useState(0);
-
-    // Fungsi rahasia untuk memunculkan login guru
+    
+    // Fitur rahasia login guru (Klik 5 kali pada ikon buku)
     const handleSecretClick = () => {
       const newCount = secretClicks + 1;
       setSecretClicks(newCount);
@@ -91,7 +192,13 @@ export default function App() {
         const studentId = Date.now().toString(); 
         const studentData = { id: studentId, name, status: 'Menunggu', startTime: new Date().toLocaleTimeString() };
         setCurrentStudent({ id: studentId, name });
-        setActiveStudents([...activeStudents, { id: studentId, name, status: 'Menunggu', startTime: new Date().toLocaleTimeString() }]);
+
+        if (isDbReady && user) {
+          // Kirim status "Menunggu" ke Firebase agar tampil di laptop Guru
+          await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'active_students', studentId), studentData);
+        } else {
+          setActiveStudents([...activeStudents, studentData]);
+        }
         setView('student-dashboard');
       }
     };
@@ -128,6 +235,19 @@ export default function App() {
   // KOMPONEN 3: DASHBOARD SISWA (SEBELUM MULAI)
   // ==========================================================
   const StudentDashboardView = () => {
+    
+    const startQuiz = async () => {
+      const studentData = { id: currentStudent.id, name: currentStudent.name, status: 'Mengerjakan', startTime: new Date().toLocaleTimeString() };
+      if (isDbReady && user) {
+        // Update status di Firebase menjadi "Mengerjakan"
+        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'active_students', currentStudent.id), studentData);
+      } else {
+        const updatedStudents = activeStudents.map(s => s.id === currentStudent.id ? studentData : s);
+        setActiveStudents(updatedStudents);
+      }
+      setView('quiz');
+    };
+
     return (
       <div className="min-h-screen bg-gray-100 p-4 md:p-8">
         <div className="max-w-4xl mx-auto bg-white rounded-2xl shadow-md p-6">
@@ -165,7 +285,7 @@ export default function App() {
   const QuizView = () => {
     const [showConfirm, setShowConfirm] = useState(false);
 
-    // Timer Logic
+    // Sistem Hitung Mundur Waktu
     useEffect(() => {
       if (timeLeft <= 0) {
         submitQuiz();
@@ -187,7 +307,8 @@ export default function App() {
       setAnswers({ ...answers, [questionId]: optionIndex });
     };
 
-    const submitQuiz = () => {
+    // Fungsi Kirim Hasil Akhir
+    const submitQuiz = async () => {
       let correct = 0;
       questions.forEach(q => {
         if (answers[q.id] === q.answer) correct++;
@@ -203,10 +324,14 @@ export default function App() {
         date: new Date().toLocaleString()
       };
 
-      setResults([...results, resultData]);
-      
-      // Hapus dari daftar siswa yang sedang aktif memantau berdasar ID
-      setActiveStudents(activeStudents.filter(s => s.id !== currentStudent.id));
+      if (isDbReady && user) {
+        // Hapus nama siswa dari daftar "Sedang Memantau", pindahkan ke "Hasil Nilai"
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'active_students', currentStudent.id));
+        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_results', currentStudent.id), resultData);
+      } else {
+        setResults(prev => [...prev, resultData]);
+        setActiveStudents(prev => prev.filter(s => s.id !== currentStudent.id));
+      }
       
       setView('result');
     };
@@ -215,7 +340,7 @@ export default function App() {
 
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col">
-        {/* Header Ujian */}
+        {/* Header (Nama & Jam) */}
         <header className="bg-white shadow-sm p-4 sticky top-0 z-10">
           <div className="max-w-5xl mx-auto flex justify-between items-center">
             <div>
@@ -229,10 +354,10 @@ export default function App() {
           </div>
         </header>
 
-        {/* Area Soal */}
+        {/* Konten Ujian */}
         <main className="flex-1 max-w-5xl mx-auto w-full p-4 flex flex-col md:flex-row gap-6 mt-4">
           
-          {/* Main Question Panel */}
+          {/* Kotak Pertanyaan Utama */}
           <div className="flex-1 bg-white rounded-xl shadow-sm p-6">
             <h2 className="text-xl font-medium text-gray-800 mb-6 leading-relaxed">
               {currentIndex + 1}. {currentQ.text}
@@ -284,7 +409,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Sidebar Navigasi Soal (Desktop) */}
+          {/* Sidebar Nomor Soal */}
           <div className="w-full md:w-64 bg-white rounded-xl shadow-sm p-4 h-fit">
             <h3 className="font-bold text-gray-700 mb-4 text-center">Navigasi Soal</h3>
             <div className="grid grid-cols-5 gap-2">
@@ -312,7 +437,7 @@ export default function App() {
           </div>
         </main>
 
-        {/* Modal Konfirmasi */}
+        {/* Modal Konfirmasi Akhiri Ujian */}
         {showConfirm && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-xl p-6 max-w-sm w-full text-center">
@@ -333,8 +458,8 @@ export default function App() {
   // KOMPONEN 5: HASIL UJIAN SISWA
   // ==========================================================
   const ResultView = () => {
-    // Ambil hasil terakhir
-    const myResult = results[results.length - 1];
+    // Cari nilai siswa saat ini di array hasil ujian
+    const myResult = results.find(r => r.id === currentStudent.id) || results[results.length - 1];
 
     return (
       <div className="min-h-screen bg-green-50 flex items-center justify-center p-4">
@@ -420,7 +545,7 @@ export default function App() {
 
     return (
       <div className="min-h-screen bg-gray-100 flex flex-col md:flex-row print:bg-white">
-        {/* Sidebar - Disembunyikan saat di-print (print:hidden) */}
+        {/* Sidebar Kiri (Sembunyi saat di-print) */}
         <div className="w-full md:w-64 bg-white shadow-lg md:min-h-screen flex flex-col print:hidden">
           <div className="p-6 border-b">
             <h2 className="text-xl font-bold text-blue-600 flex items-center gap-2">
@@ -445,17 +570,29 @@ export default function App() {
         {/* Area Konten Utama */}
         <div className="flex-1 p-6 md:p-8 overflow-y-auto print:p-0 print:overflow-visible">
           
+          {/* PERINGATAN BILA DATABASE FIREBASE BELUM DIISI */}
+          {!isDbReady && (
+            <div className="bg-orange-100 border-l-4 border-orange-500 text-orange-700 p-4 mb-6 rounded-lg print:hidden flex items-start gap-3">
+              <AlertTriangle className="w-6 h-6 shrink-0"/>
+              <div>
+                <p className="font-bold">Mode Offline Vercel</p>
+                <p className="text-sm">Anda belum menyambungkan Firebase Database. Data dari HP siswa tidak akan muncul di sini. Silakan ikuti <span className="font-bold">Panduan Konfigurasi Firebase</span> yang diberikan oleh AI untuk menyambungkannya.</p>
+              </div>
+            </div>
+          )}
+
+          {/* TAB: HASIL NILAI SISWA */}
           {tab === 'hasil' && (
             <div className="bg-white rounded-xl shadow-sm border p-6 print:shadow-none print:border-none print:p-0">
               
-              {/* Header Khusus Print (Hanya muncul di kertas PDF) */}
+              {/* KOP SURAT (Hanya muncul di kertas PDF saat di-print) */}
               <div className="hidden print:block mb-8 text-center text-black">
                 <h2 className="text-2xl font-bold uppercase">Laporan Hasil Ujian CBT</h2>
                 <h3 className="text-xl font-semibold">Madrasah Tsanawiyah - Kelas 9</h3>
                 <div className="border-b-4 border-black mt-4 mb-6"></div>
               </div>
 
-              {/* Header Web & Tombol Print (Sembunyi saat di-print) */}
+              {/* Judul & Tombol Print (Sembunyi saat di-print) */}
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 print:hidden gap-4">
                 <h3 className="text-xl font-bold text-gray-800">Rekap Nilai Siswa</h3>
                 <button 
@@ -477,7 +614,7 @@ export default function App() {
                         <th className="p-3 border-r print:border-black">No</th>
                         <th className="p-3 border-r print:border-black">Waktu Selesai</th>
                         <th className="p-3 border-r print:border-black">Nama Siswa</th>
-                        <th className="p-3 border-r print:border-black text-center">Benar</th>
+                        <th className="p-3 border-r print:border-black text-center">Jawaban Benar</th>
                         <th className="p-3 print:border-black text-center">Nilai Akhir</th>
                       </tr>
                     </thead>
@@ -499,7 +636,7 @@ export default function App() {
                     </tbody>
                   </table>
                   
-                  {/* Tanda Tangan Guru Khusus Print */}
+                  {/* Kolom Tanda Tangan Guru (Hanya muncul di kertas PDF) */}
                   <div className="hidden print:flex justify-end mt-16 text-black pr-8">
                     <div className="text-center">
                       <p className="mb-16">Mengetahui,<br/>Guru Mata Pelajaran</p>
@@ -548,7 +685,7 @@ export default function App() {
     );
   };
 
-  // --- ROUTER SEDERHANA ---
+  // --- ROUTING SEDERHANA UNTUK GANTI HALAMAN ---
   switch(view) {
     case 'home': return <HomeView />;
     case 'student-login': return <StudentLoginView />;

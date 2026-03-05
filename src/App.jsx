@@ -1,7 +1,40 @@
 import React, { useState, useEffect } from 'react';
-import { Clock, CheckCircle, XCircle, Users, BookOpen, PlusCircle, LogOut, ArrowRight, ArrowLeft, Play, LayoutDashboard, Printer } from 'lucide-react';
+import { Clock, CheckCircle, XCircle, Users, BookOpen, PlusCircle, LogOut, ArrowRight, ArrowLeft, Play, LayoutDashboard, Printer, AlertTriangle } from 'lucide-react';
+import { initializeApp } from "firebase/app";
+import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from "firebase/auth";
+import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot } from "firebase/firestore";
 
-// --- DATA AWAL SOAL (20 Soal - Isim Mausul & Kata Perintah) ---
+// --- KONFIGURASI DATABASE FIREBASE ---
+// ⚠️ UNTUK GURU: Jika web sudah di Vercel, isi variabel di bawah ini dengan config dari akun Firebase Anda.
+const myFirebaseConfig = {
+    apiKey: "AIzaSyAfR-SMXxIVf50uCqlrIyer5nJkHxtsna8",
+    authDomain: "cbt-mts.firebaseapp.com",
+    projectId: "cbt-mts",
+    storageBucket: "cbt-mts.firebasestorage.app",
+    messagingSenderId: "485346087484",
+    appId: "1:485346087484:web:a3cdb682cd4489f8e2e939",
+    measurementId: "G-3Q9ZH01D52"
+  };
+
+// Deteksi otomatis apakah sedang di Canvas preview atau di Vercel
+const isCanvas = typeof __firebase_config !== 'undefined';
+let app, auth, db, appId;
+
+if (isCanvas) {
+  app = initializeApp(JSON.parse(__firebase_config));
+  auth = getAuth(app);
+  db = getFirestore(app);
+  appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+} else if (myFirebaseConfig.apiKey) {
+  app = initializeApp(myFirebaseConfig);
+  auth = getAuth(app);
+  db = getFirestore(app);
+  appId = "cbt-mts-app-public"; 
+}
+
+const isDbReady = !!db;
+
+// --- DATA AWAL SOAL ---
 const INITIAL_QUESTIONS = [
   { id: 1, text: "Kata yang bermakna 'Yang' untuk laki-laki tunggal (Isim Mausul) adalah...", options: ["Alladzi (الَّذِي)", "Allati (الَّتِي)", "Anta (أَنْتَ)", "Huwa (هُوَ)"], answer: 0 },
   { id: 2, text: "Kata yang bermakna 'Yang' untuk perempuan tunggal (Isim Mausul) adalah...", options: ["Alladzi (الَّذِي)", "Allati (الَّتِي)", "Hiya (هِيَ)", "Nahnu (نَحْنُ)"], answer: 1 },
@@ -26,33 +59,97 @@ const INITIAL_QUESTIONS = [
 ];
 
 export default function App() {
-  const [view, setView] = useState('home'); // home, student-login, teacher-login, student-dashboard, quiz, teacher-dashboard
+  // --- FITUR ANTI REFRESH (Membaca data dari memori browser saat dimuat) ---
+  const [view, setView] = useState(() => localStorage.getItem('cbt_view') || 'home'); 
+  const [currentStudent, setCurrentStudent] = useState(() => JSON.parse(localStorage.getItem('cbt_student')) || { id: null, name: '' });
+  const [answers, setAnswers] = useState(() => JSON.parse(localStorage.getItem('cbt_answers')) || {});
+  const [timeLeft, setTimeLeft] = useState(() => parseInt(localStorage.getItem('cbt_timeLeft')) || 3600);
+  const [currentIndex, setCurrentIndex] = useState(() => parseInt(localStorage.getItem('cbt_currentIndex')) || 0);
+  
   const [questions, setQuestions] = useState(INITIAL_QUESTIONS);
   const [results, setResults] = useState([]);
   const [activeStudents, setActiveStudents] = useState([]);
-  
-  // Data Siswa yang sedang login
-  const [currentStudent, setCurrentStudent] = useState({ id: null, name: '' });
+  const [user, setUser] = useState(null);
 
-  // --- KOMPONEN: LAYAR UTAMA (Pilih Peran) ---
+  // --- FITUR ANTI REFRESH (Menyimpan setiap ada perubahan ke memori browser) ---
+  useEffect(() => {
+    localStorage.setItem('cbt_view', view);
+    localStorage.setItem('cbt_student', JSON.stringify(currentStudent));
+    localStorage.setItem('cbt_answers', JSON.stringify(answers));
+    localStorage.setItem('cbt_timeLeft', timeLeft.toString());
+    localStorage.setItem('cbt_currentIndex', currentIndex.toString());
+  }, [view, currentStudent, answers, timeLeft, currentIndex]);
+
+  // Fungsi untuk membersihkan memori (Saat logout atau selesai ujian)
+  const clearSession = () => {
+    localStorage.removeItem('cbt_view');
+    localStorage.removeItem('cbt_student');
+    localStorage.removeItem('cbt_answers');
+    localStorage.removeItem('cbt_timeLeft');
+    localStorage.removeItem('cbt_currentIndex');
+    
+    setCurrentStudent({ id: null, name: '' });
+    setAnswers({});
+    setTimeLeft(3600);
+    setCurrentIndex(0);
+    setView('home');
+  };
+
+  // 1. Inisialisasi Auth Firebase
+  useEffect(() => {
+    if (!isDbReady) return;
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch(e) { console.error("Auth Error", e); }
+    };
+    initAuth();
+    
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  // 2. Tarik Data Realtime (Khusus Guru & Siswa terhubung)
+  useEffect(() => {
+    if (!isDbReady || !user) return;
+
+    const activeRef = collection(db, 'artifacts', appId, 'public', 'data', 'active_students');
+    const unsubActive = onSnapshot(activeRef, (snapshot) => {
+      const students = snapshot.docs.map(doc => doc.data());
+      setActiveStudents(students);
+    }, (error) => console.error(error));
+
+    const resultsRef = collection(db, 'artifacts', appId, 'public', 'data', 'quiz_results');
+    const unsubResults = onSnapshot(resultsRef, (snapshot) => {
+      const res = snapshot.docs.map(doc => doc.data());
+      setResults(res);
+    }, (error) => console.error(error));
+
+    return () => {
+      unsubActive();
+      unsubResults();
+    };
+  }, [user]);
+
+  // --- KOMPONEN: LAYAR UTAMA ---
   const HomeView = () => {
     const [secretClicks, setSecretClicks] = useState(0);
-
-    // Fungsi rahasia untuk memunculkan login guru
     const handleSecretClick = () => {
       const newCount = secretClicks + 1;
       setSecretClicks(newCount);
       if (newCount >= 5) {
         setView('teacher-login');
-        setSecretClicks(0); // reset setelah masuk
+        setSecretClicks(0); 
       }
     };
 
     return (
       <div className="min-h-screen bg-green-50 flex flex-col items-center justify-center p-4">
         <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md text-center relative">
-          
-          {/* Ikon ini menjadi tombol rahasia untuk guru */}
           <div 
             onClick={handleSecretClick}
             className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4 cursor-pointer transition-transform active:scale-95"
@@ -60,10 +157,8 @@ export default function App() {
           >
             <BookOpen className="text-green-600 w-10 h-10 select-none" />
           </div>
-          
           <h1 className="text-2xl font-bold text-gray-800 mb-2">Portal Ujian CBT</h1>
           <p className="text-gray-600 mb-8">Madrasah Tsanawiyah - Kelas 9</p>
-          
           <div className="space-y-4">
             <button 
               onClick={() => setView('student-login')}
@@ -71,7 +166,6 @@ export default function App() {
             >
               <Users className="w-5 h-5" /> Masuk Sebagai Siswa
             </button>
-            {/* Tombol Guru disembunyikan */}
           </div>
         </div>
       </div>
@@ -82,14 +176,18 @@ export default function App() {
   const StudentLoginView = () => {
     const [name, setName] = useState('');
 
-    const handleLogin = (e) => {
+    const handleLogin = async (e) => {
       e.preventDefault();
       if(name) {
-        // Buat ID unik sementara (agar siswa bernana sama tidak tertukar di sistem pantau)
-        const studentId = Date.now(); 
-        
+        const studentId = Date.now().toString(); 
+        const studentData = { id: studentId, name, status: 'Menunggu', startTime: new Date().toLocaleTimeString() };
         setCurrentStudent({ id: studentId, name });
-        setActiveStudents([...activeStudents, { id: studentId, name, status: 'Menunggu', startTime: new Date().toLocaleTimeString() }]);
+
+        if (isDbReady && user) {
+          await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'active_students', studentId), studentData);
+        } else {
+          setActiveStudents([...activeStudents, studentData]);
+        }
         setView('student-dashboard');
       }
     };
@@ -113,7 +211,6 @@ export default function App() {
                 placeholder="Masukkan nama lengkap Anda..." 
               />
             </div>
-            {/* Form NIS Dihapus */}
             <button type="submit" className="w-full py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg mt-4">
               Masuk
             </button>
@@ -125,6 +222,18 @@ export default function App() {
 
   // --- KOMPONEN: DASHBOARD SISWA ---
   const StudentDashboardView = () => {
+    
+    const startQuiz = async () => {
+      const studentData = { id: currentStudent.id, name: currentStudent.name, status: 'Mengerjakan', startTime: new Date().toLocaleTimeString() };
+      if (isDbReady && user) {
+        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'active_students', currentStudent.id), studentData);
+      } else {
+        const updatedStudents = activeStudents.map(s => s.id === currentStudent.id ? studentData : s);
+        setActiveStudents(updatedStudents);
+      }
+      setView('quiz');
+    };
+
     return (
       <div className="min-h-screen bg-gray-100 p-4 md:p-8">
         <div className="max-w-4xl mx-auto bg-white rounded-2xl shadow-md p-6">
@@ -133,7 +242,7 @@ export default function App() {
               <h2 className="text-2xl font-bold text-gray-800">Halo, {currentStudent.name}</h2>
               <p className="text-gray-500">Selamat datang, pastikan koneksi internet stabil.</p>
             </div>
-            <button onClick={() => setView('home')} className="flex items-center gap-2 text-red-500 hover:text-red-700 px-4 py-2 rounded-lg border border-red-500 hover:bg-red-50">
+            <button onClick={clearSession} className="flex items-center gap-2 text-red-500 hover:text-red-700 px-4 py-2 rounded-lg border border-red-500 hover:bg-red-50">
               <LogOut className="w-4 h-4" /> Keluar
             </button>
           </div>
@@ -142,18 +251,13 @@ export default function App() {
             <BookOpen className="w-12 h-12 text-blue-500 mx-auto mb-4" />
             <h3 className="text-xl font-bold text-gray-800 mb-2">Ujian Bahasa Arab & PAI</h3>
             <p className="text-gray-600 mb-2">Materi: Isim Mausul & Fi'il Amar</p>
-            <p className="text-gray-600 mb-6">Jumlah Soal: {questions.length} | Waktu: 60 Menit</p>
+            <p className="text-gray-600 mb-6">Jumlah Soal: {questions.length} | Sisa Waktu: {Math.floor(timeLeft / 60)} Menit</p>
             
             <button 
-              onClick={() => {
-                // Update status siswa menjadi 'Mengerjakan'
-                const updatedStudents = activeStudents.map(s => s.id === currentStudent.id ? { ...s, status: 'Mengerjakan' } : s);
-                setActiveStudents(updatedStudents);
-                setView('quiz');
-              }} 
+              onClick={startQuiz} 
               className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-full shadow-lg flex items-center gap-2 mx-auto"
             >
-              <Play className="w-5 h-5" /> Mulai Ujian Sekarang
+              <Play className="w-5 h-5" /> {timeLeft < 3600 ? "Lanjutkan Ujian" : "Mulai Ujian Sekarang"}
             </button>
           </div>
         </div>
@@ -163,12 +267,8 @@ export default function App() {
 
   // --- KOMPONEN: UJIAN (QUIZ) ---
   const QuizView = () => {
-    const [currentIndex, setCurrentIndex] = useState(0);
-    const [answers, setAnswers] = useState({});
-    const [timeLeft, setTimeLeft] = useState(3600); // 60 menit dalam detik
     const [showConfirm, setShowConfirm] = useState(false);
 
-    // Timer Logic
     useEffect(() => {
       if (timeLeft <= 0) {
         submitQuiz();
@@ -188,7 +288,7 @@ export default function App() {
       setAnswers({ ...answers, [questionId]: optionIndex });
     };
 
-    const submitQuiz = () => {
+    const submitQuiz = async () => {
       let correct = 0;
       questions.forEach(q => {
         if (answers[q.id] === q.answer) correct++;
@@ -196,6 +296,7 @@ export default function App() {
       const finalScore = Math.round((correct / questions.length) * 100);
       
       const resultData = {
+        id: currentStudent.id,
         name: currentStudent.name,
         score: finalScore,
         correctAnswers: correct,
@@ -203,10 +304,13 @@ export default function App() {
         date: new Date().toLocaleString()
       };
 
-      setResults([...results, resultData]);
-      
-      // Hapus dari daftar siswa yang sedang aktif memantau berdasar ID
-      setActiveStudents(activeStudents.filter(s => s.id !== currentStudent.id));
+      if (isDbReady && user) {
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'active_students', currentStudent.id));
+        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_results', currentStudent.id), resultData);
+      } else {
+        setResults(prev => [...prev, resultData]);
+        setActiveStudents(prev => prev.filter(s => s.id !== currentStudent.id));
+      }
       
       setView('result');
     };
@@ -215,7 +319,6 @@ export default function App() {
 
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col">
-        {/* Header Ujian */}
         <header className="bg-white shadow-sm p-4 sticky top-0 z-10">
           <div className="max-w-5xl mx-auto flex justify-between items-center">
             <div>
@@ -229,10 +332,7 @@ export default function App() {
           </div>
         </header>
 
-        {/* Area Soal */}
         <main className="flex-1 max-w-5xl mx-auto w-full p-4 flex flex-col md:flex-row gap-6 mt-4">
-          
-          {/* Main Question Panel */}
           <div className="flex-1 bg-white rounded-xl shadow-sm p-6">
             <h2 className="text-xl font-medium text-gray-800 mb-6 leading-relaxed">
               {currentIndex + 1}. {currentQ.text}
@@ -283,7 +383,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Sidebar Navigasi Soal (Desktop) */}
           <div className="w-full md:w-64 bg-white rounded-xl shadow-sm p-4 h-fit">
             <h3 className="font-bold text-gray-700 mb-4 text-center">Navigasi Soal</h3>
             <div className="grid grid-cols-5 gap-2">
@@ -311,7 +410,6 @@ export default function App() {
           </div>
         </main>
 
-        {/* Modal Konfirmasi */}
         {showConfirm && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-xl p-6 max-w-sm w-full text-center">
@@ -330,8 +428,8 @@ export default function App() {
 
   // --- KOMPONEN: HASIL UJIAN SISWA ---
   const ResultView = () => {
-    // Ambil hasil terakhir
-    const myResult = results[results.length - 1];
+    // Ambil hasil dari memori sementara atau database
+    const myResult = results.find(r => r.id === currentStudent.id) || results[results.length - 1];
 
     return (
       <div className="min-h-screen bg-green-50 flex items-center justify-center p-4">
@@ -340,16 +438,16 @@ export default function App() {
             <CheckCircle className="text-green-500 w-12 h-12" />
           </div>
           <h2 className="text-3xl font-bold text-gray-800 mb-2">Ujian Selesai!</h2>
-          <p className="text-gray-600 mb-6">Terima kasih telah mengerjakan, {myResult?.name}.</p>
+          <p className="text-gray-600 mb-6">Terima kasih telah mengerjakan, {myResult?.name || currentStudent.name}.</p>
           
           <div className="bg-gray-50 rounded-xl p-6 mb-6">
             <p className="text-sm text-gray-500 uppercase tracking-wide font-bold mb-1">Nilai Anda</p>
-            <p className="text-6xl font-black text-green-600">{myResult?.score}</p>
-            <p className="text-gray-500 mt-2">Benar {myResult?.correctAnswers} dari {myResult?.totalQuestions} Soal</p>
+            <p className="text-6xl font-black text-green-600">{myResult?.score || "..."}</p>
+            <p className="text-gray-500 mt-2">Benar {myResult?.correctAnswers || "..."} dari {myResult?.totalQuestions || "..."} Soal</p>
           </div>
 
           <button 
-            onClick={() => setView('home')}
+            onClick={clearSession}
             className="w-full py-3 bg-gray-800 hover:bg-gray-900 text-white font-bold rounded-lg transition"
           >
             Kembali ke Beranda
@@ -368,7 +466,7 @@ export default function App() {
       e.preventDefault();
       if(pwd === 'guru123') {
         setView('teacher-dashboard');
-        setPwd(''); // reset password input
+        setPwd(''); 
       } else {
         setError(true);
       }
@@ -377,7 +475,7 @@ export default function App() {
     return (
       <div className="min-h-screen bg-blue-50 flex items-center justify-center p-4">
         <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md">
-          <button onClick={() => setView('home')} className="text-gray-500 mb-4 flex items-center gap-1 hover:text-gray-800">
+          <button onClick={clearSession} className="text-gray-500 mb-4 flex items-center gap-1 hover:text-gray-800">
             <ArrowLeft className="w-4 h-4"/> Kembali
           </button>
           <div className="flex items-center gap-3 mb-6">
@@ -408,37 +506,11 @@ export default function App() {
 
   // --- KOMPONEN: DASHBOARD GURU ---
   const TeacherDashboardView = () => {
-    const [tab, setTab] = useState('hasil'); // hasil, pantau, soal
-
-    // Form Tambah Soal
-    const [newQuestion, setNewQuestion] = useState("");
-    const [newOptions, setNewOptions] = useState(["", "", "", ""]);
-    const [newAnswer, setNewAnswer] = useState(0);
-
-    const handleAddQuestion = (e) => {
-      e.preventDefault();
-      const q = {
-        id: questions.length + 1,
-        text: newQuestion,
-        options: [...newOptions],
-        answer: newAnswer
-      };
-      setQuestions([...questions, q]);
-      setNewQuestion("");
-      setNewOptions(["", "", "", ""]);
-      setNewAnswer(0);
-      alert("Soal berhasil ditambahkan!");
-    };
-
-    const handleOptionChange = (index, value) => {
-      const updated = [...newOptions];
-      updated[index] = value;
-      setNewOptions(updated);
-    };
+    const [tab, setTab] = useState('hasil'); 
 
     return (
       <div className="min-h-screen bg-gray-100 flex flex-col md:flex-row print:bg-white">
-        {/* Sidebar - Disembunyikan saat di-print (print:hidden) */}
+        {/* Sidebar */}
         <div className="w-full md:w-64 bg-white shadow-lg md:min-h-screen flex flex-col print:hidden">
           <div className="p-6 border-b">
             <h2 className="text-xl font-bold text-blue-600 flex items-center gap-2">
@@ -452,12 +524,9 @@ export default function App() {
             <button onClick={() => setTab('pantau')} className={`flex items-center gap-2 w-full text-left px-4 py-3 rounded-lg font-medium whitespace-nowrap ${tab === 'pantau' ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-50'}`}>
               <Users className="w-5 h-5"/> Pantau Ujian
             </button>
-            <button onClick={() => setTab('soal')} className={`flex items-center gap-2 w-full text-left px-4 py-3 rounded-lg font-medium whitespace-nowrap ${tab === 'soal' ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-50'}`}>
-              <BookOpen className="w-5 h-5"/> Kelola Soal
-            </button>
           </nav>
           <div className="p-4 border-t">
-            <button onClick={() => setView('home')} className="flex items-center gap-2 w-full text-left px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg font-medium">
+            <button onClick={clearSession} className="flex items-center gap-2 w-full text-left px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg font-medium">
               <LogOut className="w-5 h-5"/> Keluar
             </button>
           </div>
@@ -466,18 +535,25 @@ export default function App() {
         {/* Konten Utama */}
         <div className="flex-1 p-6 md:p-8 overflow-y-auto print:p-0 print:overflow-visible">
           
+          {/* PERINGATAN OFFLINE */}
+          {!isDbReady && (
+            <div className="bg-orange-100 border-l-4 border-orange-500 text-orange-700 p-4 mb-6 rounded-lg print:hidden flex items-start gap-3">
+              <AlertTriangle className="w-6 h-6 shrink-0"/>
+              <div>
+                <p className="font-bold">Mode Offline Vercel</p>
+                <p className="text-sm">Anda belum menyambungkan Firebase Database. Data dari HP siswa tidak akan muncul di sini. Silakan ikuti <span className="font-bold">Panduan Konfigurasi Firebase</span> yang diberikan oleh AI untuk menyambungkannya.</p>
+              </div>
+            </div>
+          )}
+
           {tab === 'hasil' && (
             <div className="bg-white rounded-xl shadow-sm border p-6 print:shadow-none print:border-none print:p-0">
-              
-              {/* Header Khusus Print (Hanya muncul di kertas PDF) */}
               <div className="hidden print:block mb-8 text-center text-black">
                 <h2 className="text-2xl font-bold uppercase">Laporan Hasil Ujian CBT</h2>
                 <h3 className="text-xl font-semibold">Madrasah Tsanawiyah - Kelas 9</h3>
-                <p className="mt-2 text-md">Mata Pelajaran: Bahasa Arab & PAI (Materi: Isim Mausul & Fi'il Amar)</p>
                 <div className="border-b-4 border-black mt-4 mb-6"></div>
               </div>
 
-              {/* Header Web & Tombol Print (Sembunyi saat di-print) */}
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 print:hidden gap-4">
                 <h3 className="text-xl font-bold text-gray-800">Rekap Nilai Siswa</h3>
                 <button 
@@ -489,7 +565,7 @@ export default function App() {
               </div>
 
               {results.length === 0 ? (
-                <div className="text-center py-10 text-gray-500 print:hidden">Belum ada siswa yang menyelesaikan ujian.</div>
+                <div className="text-center py-10 text-gray-500 print:hidden">Belum ada nilai yang masuk.</div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse border border-gray-200 print:border-black">
@@ -498,7 +574,7 @@ export default function App() {
                         <th className="p-3 border-r print:border-black">No</th>
                         <th className="p-3 border-r print:border-black">Waktu Selesai</th>
                         <th className="p-3 border-r print:border-black">Nama Siswa</th>
-                        <th className="p-3 border-r print:border-black text-center">Jawaban Benar</th>
+                        <th className="p-3 border-r print:border-black text-center">Benar</th>
                         <th className="p-3 print:border-black text-center">Nilai Akhir</th>
                       </tr>
                     </thead>
@@ -518,16 +594,12 @@ export default function App() {
                       ))}
                     </tbody>
                   </table>
-                  
-                  {/* Tanda Tangan Guru Khusus Print */}
                   <div className="hidden print:flex justify-end mt-16 text-black pr-8">
                     <div className="text-center">
                       <p className="mb-16">Mengetahui,<br/>Guru Mata Pelajaran</p>
                       <p className="font-bold underline">___________________________</p>
-                      <p>NIP. </p>
                     </div>
                   </div>
-
                 </div>
               )}
             </div>
@@ -540,7 +612,7 @@ export default function App() {
                 <span className="bg-blue-100 text-blue-800 text-sm py-1 px-3 rounded-full">{activeStudents.length} Online</span>
               </h3>
               {activeStudents.length === 0 ? (
-                <div className="text-center py-10 text-gray-500">Tidak ada siswa yang sedang online atau ujian saat ini.</div>
+                <div className="text-center py-10 text-gray-500">Tidak ada siswa yang sedang online saat ini.</div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {activeStudents.map((s, idx) => (
@@ -564,65 +636,11 @@ export default function App() {
               )}
             </div>
           )}
-
-          {tab === 'soal' && (
-            <div className="space-y-6">
-              <div className="bg-white rounded-xl shadow-sm border p-6">
-                <h3 className="text-xl font-bold mb-4 text-gray-800 flex items-center gap-2">
-                  <PlusCircle className="w-5 h-5 text-blue-600"/> Tambah Soal Baru
-                </h3>
-                <form onSubmit={handleAddQuestion} className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Pertanyaan</label>
-                    <textarea required value={newQuestion} onChange={e => setNewQuestion(e.target.value)} className="w-full border rounded-lg p-3 focus:outline-blue-500" rows="3" placeholder="Tuliskan soal di sini..."></textarea>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {newOptions.map((opt, idx) => (
-                      <div key={idx}>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Opsi {String.fromCharCode(65 + idx)}</label>
-                        <input required type="text" value={opt} onChange={e => handleOptionChange(idx, e.target.value)} className="w-full border rounded-lg p-2 focus:outline-blue-500" placeholder={`Jawaban ${String.fromCharCode(65 + idx)}`}/>
-                      </div>
-                    ))}
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Jawaban Benar</label>
-                    <select value={newAnswer} onChange={e => setNewAnswer(Number(e.target.value))} className="w-full border rounded-lg p-2 focus:outline-blue-500">
-                      <option value={0}>A</option>
-                      <option value={1}>B</option>
-                      <option value={2}>C</option>
-                      <option value={3}>D</option>
-                    </select>
-                  </div>
-                  <button type="submit" className="bg-blue-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-blue-700">Simpan Soal</button>
-                </form>
-              </div>
-
-              <div className="bg-white rounded-xl shadow-sm border p-6">
-                <h3 className="text-xl font-bold mb-4 text-gray-800">Daftar Soal ({questions.length} Soal)</h3>
-                <div className="space-y-4">
-                  {questions.map((q, idx) => (
-                    <div key={idx} className="border rounded-lg p-4 bg-gray-50">
-                      <p className="font-medium text-gray-800 mb-2">{idx + 1}. {q.text}</p>
-                      <ul className="text-sm text-gray-600 space-y-1">
-                        {q.options.map((opt, i) => (
-                          <li key={i} className={q.answer === i ? "text-green-600 font-bold" : ""}>
-                            {String.fromCharCode(65 + i)}. {opt} {q.answer === i && " (Jawaban Benar)"}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
         </div>
       </div>
     );
   };
 
-  // --- ROUTER SEDERHANA ---
   switch(view) {
     case 'home': return <HomeView />;
     case 'student-login': return <StudentLoginView />;

@@ -7,14 +7,14 @@ import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot } from "fi
 // --- KONFIGURASI DATABASE FIREBASE ---
 // ⚠️ UNTUK GURU: Jika web sudah di Vercel, isi variabel di bawah ini dengan config dari akun Firebase Anda.
 const myFirebaseConfig = {
-    apiKey: "AIzaSyAfR-SMXxIVf50uCqlrIyer5nJkHxtsna8",
-    authDomain: "cbt-mts.firebaseapp.com",
-    projectId: "cbt-mts",
-    storageBucket: "cbt-mts.firebasestorage.app",
-    messagingSenderId: "485346087484",
-    appId: "1:485346087484:web:a3cdb682cd4489f8e2e939",
-    measurementId: "G-3Q9ZH01D52"
-  };
+  apiKey: "AIzaSyAfR-SMXxIVf50uCqlrIyer5nJkHxtsna8",
+  authDomain: "cbt-mts.firebaseapp.com",
+  projectId: "cbt-mts",
+  storageBucket: "cbt-mts.firebasestorage.app",
+  messagingSenderId: "485346087484",
+  appId: "1:485346087484:web:a3cdb682cd4489f8e2e939",
+  measurementId: "G-3Q9ZH01D52"
+};
 
 // Deteksi otomatis apakah sedang di Canvas preview atau di Vercel
 const isCanvas = typeof __firebase_config !== 'undefined';

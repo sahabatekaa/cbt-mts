@@ -1,105 +1,77 @@
-import React, { useState, useEffect } from 'react';
-import { Clock, CheckCircle, XCircle, Users, BookOpen, PlusCircle, LogOut, ArrowRight, ArrowLeft, Play, LayoutDashboard, Printer, AlertTriangle } from 'lucide-react';
-import { initializeApp } from "firebase/app";
-import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from "firebase/auth";
-import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot } from "firebase/firestore";
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  Moon, Sun, LayoutGrid, Clock, LogOut, ShieldAlert, 
+  Send, ChevronLeft, ChevronRight, User, Eye, 
+  FileJson, Trash2, Printer, CheckCircle2, AlertCircle,
+  Upload, Users, BookOpen, X, KeySquare, PlayCircle,
+  UserCheck, UserX
+} from 'lucide-react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { getFirestore, doc, setDoc, onSnapshot, collection, getDocs, deleteDoc } from 'firebase/firestore';
 
-// --- 1. KONFIGURASI DATABASE FIREBASE (GRATIS) ---
-// ⚠️ UNTUK GURU: Ganti isi variabel di bawah ini dengan config dari akun Firebase Anda (Langkah 3 di Panduan).
-const myFirebaseConfig = {
-    apiKey: "AIzaSyAfR-SMXxIVf50uCqlrIyer5nJkHxtsna8",
-    authDomain: "cbt-mts.firebaseapp.com",
-    projectId: "cbt-mts",
-    storageBucket: "cbt-mts.firebasestorage.app",
-    messagingSenderId: "485346087484",
-    appId: "1:485346087484:web:a3cdb682cd4489f8e2e939",
-    measurementId: "G-3Q9ZH01D52"
-};
+// ==========================================
+// 1. FIREBASE INITIALIZATION
+// ==========================================
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'cbt-smp-v2';
 
-// Sistem deteksi otomatis lingkungan Vercel / Lokal
-const isCanvas = typeof __firebase_config !== 'undefined';
-let app, auth, db, appId;
-
-if (isCanvas) {
-  // Lingkungan uji coba otomatis
-  app = initializeApp(JSON.parse(__firebase_config));
-  auth = getAuth(app);
-  db = getFirestore(app);
-  appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-} else if (myFirebaseConfig.apiKey) {
-  // Lingkungan Vercel asli milik Anda
-  app = initializeApp(myFirebaseConfig);
-  auth = getAuth(app);
-  db = getFirestore(app);
-  appId = "cbt-mts-app-public"; 
-}
-
-const isDbReady = !!db;
-
-// --- 2. DATA SOAL UJIAN (Bisa ditambah/diubah) ---
-const INITIAL_QUESTIONS = [
-  { id: 1, text: "Kata yang bermakna 'Yang' untuk laki-laki tunggal (Isim Mausul) adalah...", options: ["Alladzi (الَّذِي)", "Allati (الَّتِي)", "Anta (أَنْتَ)", "Huwa (هُوَ)"], answer: 0 },
-  { id: 2, text: "Kata yang bermakna 'Yang' untuk perempuan tunggal (Isim Mausul) adalah...", options: ["Alladzi (الَّذِي)", "Allati (الَّتِي)", "Hiya (هِيَ)", "Nahnu (نَحْنُ)"], answer: 1 },
-  { id: 3, text: "'Bacalah!' dalam bahasa Arab (Fi'il Amar) adalah...", options: ["Iqra' (اِقْرَأْ)", "Uktub (اُكْتُبْ)", "Ijlis (اِجْلِسْ)", "Idzhab (اِذْهَبْ)"], answer: 0 },
-  { id: 4, text: "'Tulislah!' dalam bahasa Arab (Fi'il Amar) adalah...", options: ["Iqra' (اِقْرَأْ)", "Uktub (اُكْتُبْ)", "Kul (كُلْ)", "Isma' (اِسْمَعْ)"], answer: 1 },
-  { id: 5, text: "Manakah di bawah ini yang termasuk kata perintah (Fi'il Amar)?", options: ["Duduklah!", "Dia duduk", "Sedang duduk", "Tempat duduk"], answer: 0 },
-  { id: 6, text: "Isim Mausul biasanya digunakan untuk...", options: ["Menyambungkan dua kalimat", "Menanyakan sesuatu", "Menunjuk benda", "Melarang seseorang"], answer: 0 },
-  { id: 7, text: "'Masuklah!' bahasa Arabnya adalah...", options: ["Ukhruj (اُخْرُجْ)", "Udkhul (اُدْخُلْ)", "Iftah (اِفْتَحْ)", "Ighliq (اِغْلِقْ)"], answer: 1 },
-  { id: 8, text: "'Keluarlah!' bahasa Arabnya adalah...", options: ["Udkhul (اُدْخُلْ)", "Ukhruj (اُخْرُجْ)", "Qum (قُمْ)", "Nam (نَمْ)"], answer: 1 },
-  { id: 9, text: "Kata 'Alladziina (الَّذِينَ)' adalah Isim Mausul yang digunakan untuk...", options: ["Laki-laki tunggal", "Perempuan tunggal", "Laki-laki banyak/jamak", "Perempuan banyak"], answer: 2 },
-  { id: 10, text: "'Dengarkanlah!' bahasa Arabnya adalah...", options: ["Unzhur (اُنْظُرْ)", "Isma' (اِسْمَعْ)", "Iqra' (اِقْرَأْ)", "Ijlis (اِجْلِسْ)"], answer: 1 },
-  { id: 11, text: "Kata perintah (Fi'il Amar) biasanya digunakan saat kita ingin...", options: ["Menyuruh seseorang melakukan sesuatu", "Bercerita masa lalu", "Menyebutkan nama benda", "Bertanya kabar"], answer: 0 },
-  { id: 12, text: "'Bukalah!' bahasa Arabnya adalah...", options: ["Iftah (اِفْتَحْ)", "Ighliq (اِغْلِقْ)", "Idzhab (اِذْهَبْ)", "Irji' (اِرْجِعْ)"], answer: 0 },
-  { id: 13, text: "'Tutuplah!' bahasa Arabnya adalah...", options: ["Iftah (اِفْتَحْ)", "Ighliq (اِغْلِقْ)", "Uktub (اُكْتُبْ)", "Imsah (اِمْسَحْ)"], answer: 1 },
-  { id: 14, text: "Jika guru menyuruh murid laki-laki untuk berdiri, ia akan berkata...", options: ["Ijlis (اِجْلِسْ)", "Qum (قُمْ)", "Nam (نَمْ)", "Kul (كُلْ)"], answer: 1 },
-  { id: 15, text: "Kata 'Allaati (اللَّاتِي)' adalah isim mausul untuk...", options: ["Perempuan banyak/jamak", "Laki-laki banyak", "Satu laki-laki", "Satu perempuan"], answer: 0 },
-  { id: 16, text: "'Alladzaani (اللَّذَانِ)' adalah isim mausul untuk...", options: ["Satu laki-laki", "Dua laki-laki", "Satu perempuan", "Dua perempuan"], answer: 1 },
-  { id: 17, text: "Ciri utama dari Fi'il Amar (kata perintah) adalah harakat akhirnya biasanya...", options: ["Fathah (a)", "Kasrah (i)", "Dhammah (u)", "Sukun (mati)"], answer: 3 },
-  { id: 18, text: "'Ambillah!' bahasa Arabnya adalah...", options: ["Khudz (خُذْ)", "Da' (دَعْ)", "Hat (هَاتِ)", "Ta'al (تَعَالَ)"], answer: 0 },
-  { id: 19, text: "'Makanlah!' bahasa Arabnya adalah...", options: ["Isyrab (اِشْرَبْ)", "Kul (كُلْ)", "Nam (نَمْ)", "Qum (قُمْ)"], answer: 1 },
-  { id: 20, text: "Kalimat: 'Ini adalah siswa (laki-laki) ___ rajin.' Kata hubung yang tepat adalah...", options: ["Alladzi (الَّذِي)", "Allati (الَّتِي)", "Alladzina (الَّذِينَ)", "Allaati (اللَّاتِي)"], answer: 0 }
+// ==========================================
+// 2. MOCK DATA: AKUN GURU & MATA PELAJARAN
+// ==========================================
+// Dalam versi nyata, ini disimpan di database terenkripsi.
+const TEACHERS_DB = [
+  { username: 'guru_pai', password: '123', name: 'Ust. Ahmad Fulan', subject: 'Pendidikan Agama Islam' },
+  { username: 'guru_mtk', password: '123', name: 'Ibu Siti Aminah', subject: 'Matematika' },
+  { username: 'guru_ipa', password: '123', name: 'Bapak Budi Santoso', subject: 'Ilmu Pengetahuan Alam' }
 ];
 
-export default function App() {
-  // --- FITUR ANTI REFRESH (Membaca data dari memori browser saat dimuat) ---
-  const [view, setView] = useState(() => localStorage.getItem('cbt_view') || 'home'); 
-  const [currentStudent, setCurrentStudent] = useState(() => JSON.parse(localStorage.getItem('cbt_student')) || { id: null, name: '' });
-  const [answers, setAnswers] = useState(() => JSON.parse(localStorage.getItem('cbt_answers')) || {});
-  const [timeLeft, setTimeLeft] = useState(() => parseInt(localStorage.getItem('cbt_timeLeft')) || 3600);
-  const [currentIndex, setCurrentIndex] = useState(() => parseInt(localStorage.getItem('cbt_currentIndex')) || 0);
-  
-  const [questions, setQuestions] = useState(INITIAL_QUESTIONS);
-  const [results, setResults] = useState([]);
-  const [activeStudents, setActiveStudents] = useState([]);
-  const [user, setUser] = useState(null);
+// ==========================================
+// 3. REUSABLE UI COMPONENTS
+// ==========================================
+const Card = ({ children, className = '', isDarkMode }) => (
+  <div className={`backdrop-blur-xl border shadow-2xl rounded-3xl transition-all duration-300
+    ${isDarkMode 
+      ? 'bg-slate-800/40 border-slate-700/50 shadow-black/50 text-slate-100' 
+      : 'bg-white/60 border-white/80 shadow-emerald-900/10 text-slate-800'} 
+    ${className}`}>
+    {children}
+  </div>
+);
 
-  // --- FITUR ANTI REFRESH (Menyimpan setiap ada perubahan ke memori browser) ---
+// ==========================================
+// 4. MAIN APPLICATION COMPONENT
+// ==========================================
+const App = () => {
+  // --- GLOBAL STATES ---
+  const [authUser, setAuthUser] = useState(null);
+  const [isDarkMode, setIsDarkMode] = useState(false);
+  const [view, setView] = useState('student_login'); // Default langsung ke login siswa
+  const [modal, setModal] = useState({ isOpen: false, type: '', message: '', inputValue: '' });
+
+  // --- STUDENT STATES ---
+  const [user, setUser] = useState({ name: '', class: '', token: '' });
+  const [examState, setExamState] = useState({
+    answers: {}, timeLeft: 0, currentIdx: 0, isFinished: false, violations: 0, score: 0
+  });
+  const [isStudentReady, setIsStudentReady] = useState(false);
+  const [activeSession, setActiveSession] = useState(null); 
+  const [studentQuestions, setStudentQuestions] = useState([]); 
+
+  // --- TEACHER STATES ---
+  const [activeTeacher, setActiveTeacher] = useState(null);
+  const [teacherLoginInput, setTeacherLoginInput] = useState({ username: '', password: '' });
+  const [teacherQuestions, setTeacherQuestions] = useState([]); 
+  const [adminSelectedClass, setAdminSelectedClass] = useState('7A');
+  const [studentsData, setStudentsData] = useState([]); 
+
+  const timerRef = useRef(null);
+
+  // --- EFFECT: FIREBASE AUTH & DARK MODE ---
   useEffect(() => {
-    localStorage.setItem('cbt_view', view);
-    localStorage.setItem('cbt_student', JSON.stringify(currentStudent));
-    localStorage.setItem('cbt_answers', JSON.stringify(answers));
-    localStorage.setItem('cbt_timeLeft', timeLeft.toString());
-    localStorage.setItem('cbt_currentIndex', currentIndex.toString());
-  }, [view, currentStudent, answers, timeLeft, currentIndex]);
-
-  // Fungsi untuk membersihkan memori (Saat logout atau selesai ujian agar HP bisa dipakai siswa lain)
-  const clearSession = () => {
-    localStorage.removeItem('cbt_view');
-    localStorage.removeItem('cbt_student');
-    localStorage.removeItem('cbt_answers');
-    localStorage.removeItem('cbt_timeLeft');
-    localStorage.removeItem('cbt_currentIndex');
-    
-    setCurrentStudent({ id: null, name: '' });
-    setAnswers({});
-    setTimeLeft(3600); // Reset ke 60 Menit
-    setCurrentIndex(0);
-    setView('home');
-  };
-
-  // --- KONEKSI KE FIREBASE DATABASE ---
-  useEffect(() => {
-    if (!isDbReady) return;
     const initAuth = async () => {
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -107,593 +79,710 @@ export default function App() {
         } else {
           await signInAnonymously(auth);
         }
-      } catch(e) { console.error("Gagal konek auth Firebase", e); }
+      } catch (error) { console.error("Auth Error:", error); }
     };
     initAuth();
-    
-    const unsubscribe = onAuthStateChanged(auth, setUser);
+    const unsubscribe = onAuthStateChanged(auth, (u) => setAuthUser(u));
+
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      setIsDarkMode(true);
+    }
     return () => unsubscribe();
   }, []);
 
-  // Tarik Data Realtime (Khusus Guru memantau & Siswa terhubung)
+  // --- EFFECT: RESTORE SESSION FROM LOCAL STORAGE ---
   useEffect(() => {
-    if (!isDbReady || !user) return;
-
-    // Pantau siswa aktif (Sedang Mengerjakan)
-    const activeRef = collection(db, 'artifacts', appId, 'public', 'data', 'active_students');
-    const unsubActive = onSnapshot(activeRef, (snapshot) => {
-      const students = snapshot.docs.map(doc => doc.data());
-      setActiveStudents(students);
-    }, (error) => console.error(error));
-
-    // Pantau Hasil Ujian (Selesai Mengerjakan)
-    const resultsRef = collection(db, 'artifacts', appId, 'public', 'data', 'quiz_results');
-    const unsubResults = onSnapshot(resultsRef, (snapshot) => {
-      const res = snapshot.docs.map(doc => doc.data());
-      setResults(res);
-    }, (error) => console.error(error));
-
-    return () => {
-      unsubActive();
-      unsubResults();
-    };
-  }, [user]);
-
-  // ==========================================================
-  // KOMPONEN 1: LAYAR UTAMA
-  // ==========================================================
-  const HomeView = () => {
-    const [secretClicks, setSecretClicks] = useState(0);
-    
-    // Fitur rahasia login guru (Klik 5 kali pada ikon buku)
-    const handleSecretClick = () => {
-      const newCount = secretClicks + 1;
-      setSecretClicks(newCount);
-      if (newCount >= 5) {
-        setView('teacher-login');
-        setSecretClicks(0); 
-      }
-    };
-
-    return (
-      <div className="min-h-screen bg-green-50 flex flex-col items-center justify-center p-4">
-        <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md text-center relative">
-          <div 
-            onClick={handleSecretClick}
-            className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4 cursor-pointer transition-transform active:scale-95"
-            title="Klik 5x untuk akses Admin"
-          >
-            <BookOpen className="text-green-600 w-10 h-10 select-none" />
-          </div>
-          <h1 className="text-2xl font-bold text-gray-800 mb-2">Portal Ujian CBT</h1>
-          <p className="text-gray-600 mb-8">Madrasah Tsanawiyah - Kelas 9</p>
-          <div className="space-y-4">
-            <button 
-              onClick={() => setView('student-login')}
-              className="w-full py-3 px-4 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-xl transition flex items-center justify-center gap-2"
-            >
-              <Users className="w-5 h-5" /> Masuk Sebagai Siswa
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  // ==========================================================
-  // KOMPONEN 2: LOGIN SISWA
-  // ==========================================================
-  const StudentLoginView = () => {
-    const [name, setName] = useState('');
-
-    const handleLogin = async (e) => {
-      e.preventDefault();
-      if(name) {
-        const studentId = Date.now().toString(); 
-        const studentData = { id: studentId, name, status: 'Menunggu', startTime: new Date().toLocaleTimeString() };
-        setCurrentStudent({ id: studentId, name });
-
-        if (isDbReady && user) {
-          // Kirim status "Menunggu" ke Firebase agar tampil di laptop Guru
-          await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'active_students', studentId), studentData);
-        } else {
-          setActiveStudents([...activeStudents, studentData]);
+    const saved = localStorage.getItem('cbt_v2_session');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (['student_waiting', 'student_exam', 'student_result'].includes(parsed.view)) {
+          setUser(parsed.user);
+          setExamState(parsed.examState);
+          setIsStudentReady(parsed.isStudentReady);
+          setStudentQuestions(parsed.studentQuestions || []);
+          setView(parsed.view);
+        } else if (parsed.view === 'teacher_dashboard') {
+          setActiveTeacher(parsed.activeTeacher);
+          setView(parsed.view);
         }
-        setView('student-dashboard');
-      }
-    };
+      } catch (e) { console.error(e); }
+    }
+  }, []);
 
-    return (
-      <div className="min-h-screen bg-green-50 flex items-center justify-center p-4">
-        <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md">
-          <button onClick={clearSession} className="text-gray-500 mb-4 flex items-center gap-1 hover:text-gray-800">
-            <ArrowLeft className="w-4 h-4"/> Kembali
-          </button>
-          <h2 className="text-2xl font-bold text-gray-800 mb-6">Login Siswa</h2>
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div>
-              <label className="block text-gray-700 text-sm font-bold mb-2">Nama Lengkap</label>
-              <input 
-                type="text" 
-                required 
-                value={name} 
-                onChange={(e) => setName(e.target.value)} 
-                className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:border-green-500" 
-                placeholder="Masukkan nama lengkap Anda..." 
-              />
-            </div>
-            <button type="submit" className="w-full py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg mt-4">
-              Masuk
-            </button>
-          </form>
-        </div>
-      </div>
-    );
-  };
+  // Save state whenever it changes
+  useEffect(() => {
+    if (view !== 'student_login' && view !== 'teacher_login') {
+      localStorage.setItem('cbt_v2_session', JSON.stringify({ 
+        view, user, examState, isStudentReady, studentQuestions, activeTeacher 
+      }));
+    }
+  }, [view, user, examState, isStudentReady, studentQuestions, activeTeacher]);
 
-  // ==========================================================
-  // KOMPONEN 3: DASHBOARD SISWA (SEBELUM MULAI)
-  // ==========================================================
-  const StudentDashboardView = () => {
+  // --- EFFECT: STUDENT LISTENING TO CLASS SESSION (WAITING ROOM LOGIC) ---
+  useEffect(() => {
+    if (!authUser || !user.class || (view !== 'student_waiting' && view !== 'student_exam')) return;
     
-    const startQuiz = async () => {
-      const studentData = { id: currentStudent.id, name: currentStudent.name, status: 'Mengerjakan', startTime: new Date().toLocaleTimeString() };
-      if (isDbReady && user) {
-        // Update status di Firebase menjadi "Mengerjakan"
-        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'active_students', currentStudent.id), studentData);
-      } else {
-        const updatedStudents = activeStudents.map(s => s.id === currentStudent.id ? studentData : s);
-        setActiveStudents(updatedStudents);
+    const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', user.class);
+    const unsub = onSnapshot(sessionRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setActiveSession(data);
+        
+        if (data.status === 'running' && view === 'student_waiting' && isStudentReady) {
+          setStudentQuestions(data.questions || []);
+          setExamState(prev => ({ ...prev, timeLeft: (data.duration || 60) * 60 }));
+          setView('student_exam');
+        }
+        
+        if (data.status === 'waiting' && view === 'student_exam') {
+          handleForceReset();
+        }
       }
-      setView('quiz');
-    };
+    });
+    return () => unsub();
+  }, [authUser, user.class, view, isStudentReady]);
 
-    return (
-      <div className="min-h-screen bg-gray-100 p-4 md:p-8">
-        <div className="max-w-4xl mx-auto bg-white rounded-2xl shadow-md p-6">
-          <div className="flex justify-between items-center mb-8 border-b pb-4">
-            <div>
-              <h2 className="text-2xl font-bold text-gray-800">Halo, {currentStudent.name}</h2>
-              <p className="text-gray-500">Selamat datang, pastikan koneksi internet stabil.</p>
-            </div>
-            <button onClick={clearSession} className="flex items-center gap-2 text-red-500 hover:text-red-700 px-4 py-2 rounded-lg border border-red-500 hover:bg-red-50">
-              <LogOut className="w-4 h-4" /> Keluar
-            </button>
-          </div>
-
-          <div className="bg-blue-50 border border-blue-200 rounded-xl p-6 text-center">
-            <BookOpen className="w-12 h-12 text-blue-500 mx-auto mb-4" />
-            <h3 className="text-xl font-bold text-gray-800 mb-2">Ujian Bahasa Arab & PAI</h3>
-            <p className="text-gray-600 mb-2">Materi: Isim Mausul & Fi'il Amar</p>
-            <p className="text-gray-600 mb-6">Jumlah Soal: {questions.length} | Sisa Waktu: {Math.floor(timeLeft / 60)} Menit</p>
-            
-            <button 
-              onClick={startQuiz} 
-              className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-full shadow-lg flex items-center gap-2 mx-auto"
-            >
-              <Play className="w-5 h-5" /> {timeLeft < 3600 ? "Lanjutkan Ujian" : "Mulai Ujian Sekarang"}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  // ==========================================================
-  // KOMPONEN 4: HALAMAN UJIAN (QUIZ)
-  // ==========================================================
-  const QuizView = () => {
-    const [showConfirm, setShowConfirm] = useState(false);
-
-    // Sistem Hitung Mundur Waktu
-    useEffect(() => {
-      if (timeLeft <= 0) {
-        submitQuiz();
-        return;
-      }
-      const timer = setInterval(() => setTimeLeft(prev => prev - 1), 1000);
-      return () => clearInterval(timer);
-    }, [timeLeft]);
-
-    // Format detik jadi MM:SS
-    const formatTime = (seconds) => {
-      const m = Math.floor(seconds / 60);
-      const s = seconds % 60;
-      return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-    };
-
-    // Fungsi saat siswa memilih jawaban A/B/C/D
-    const handleSelectOption = (questionId, optionIndex) => {
-      setAnswers({ ...answers, [questionId]: optionIndex });
-    };
-
-    // Fungsi Kirim Hasil Akhir
-    const submitQuiz = async () => {
-      let correct = 0;
-      questions.forEach(q => {
-        if (answers[q.id] === q.answer) correct++;
+  // --- EFFECT: TEACHER LISTENING TO STUDENTS & FETCHING BANK SOAL ---
+  useEffect(() => {
+    if (view === 'teacher_dashboard' && authUser && activeTeacher) {
+      const studentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'students');
+      const unsubStudents = onSnapshot(studentsRef, (snapshot) => {
+        const data = [];
+        snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
+        data.sort((a, b) => (b.score || 0) - (a.score || 0));
+        setStudentsData(data);
       });
-      const finalScore = Math.round((correct / questions.length) * 100);
-      
-      const resultData = {
-        id: currentStudent.id,
-        name: currentStudent.name,
-        score: finalScore,
-        correctAnswers: correct,
-        totalQuestions: questions.length,
-        date: new Date().toLocaleString()
-      };
 
-      if (isDbReady && user) {
-        // Hapus nama siswa dari daftar "Sedang Memantau", pindahkan ke "Hasil Nilai"
-        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'active_students', currentStudent.id));
-        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_results', currentStudent.id), resultData);
-      } else {
-        setResults(prev => [...prev, resultData]);
-        setActiveStudents(prev => prev.filter(s => s.id !== currentStudent.id));
+      const qRef = doc(db, 'artifacts', appId, 'public', 'data', 'questions_bank', activeTeacher.username);
+      const unsubQuestions = onSnapshot(qRef, (docSnap) => {
+        if (docSnap.exists() && docSnap.data().data) {
+          setTeacherQuestions(docSnap.data().data);
+        } else {
+          setTeacherQuestions([]);
+        }
+      });
+
+      return () => { unsubStudents(); unsubQuestions(); };
+    }
+  }, [view, authUser, activeTeacher]);
+
+  // --- EFFECT: SYNC STUDENT PROGRESS TO FIREBASE ---
+  const syncStudentToFirebase = (currentState, isTabActive = true, readyStatus = isStudentReady) => {
+    if (!authUser || !user.name) return;
+    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'students', authUser.uid);
+    setDoc(docRef, {
+      name: user.name, 
+      class: user.class,
+      isReady: readyStatus,
+      progress: Object.keys(currentState.answers).length,
+      violations: currentState.violations,
+      isFinished: currentState.isFinished,
+      score: currentState.score,
+      lastActive: Date.now(), 
+      isTabActive: isTabActive
+    }, { merge: true });
+  };
+
+  useEffect(() => {
+    if (view === 'student_exam' || view === 'student_waiting') {
+      syncStudentToFirebase(examState, !document.hidden, isStudentReady);
+    }
+  }, [examState.answers, view, isStudentReady]);
+
+  // --- EFFECT: EXAM TIMER ---
+  useEffect(() => {
+    if (view === 'student_exam' && examState.timeLeft > 0 && !examState.isFinished) {
+      timerRef.current = setInterval(() => {
+        setExamState(prev => {
+          if (prev.timeLeft <= 1) {
+            handleAutoFinish(prev);
+            return { ...prev, timeLeft: 0 };
+          }
+          return { ...prev, timeLeft: prev.timeLeft - 1 };
+        });
+      }, 1000);
+    }
+    return () => clearInterval(timerRef.current);
+  }, [view, examState.isFinished]);
+
+  // --- EFFECT: ANTI-CHEATING (TAB SWITCH DETECTION) ---
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (view === 'student_exam' && !examState.isFinished && !modal.isOpen) {
+        if (document.hidden) {
+          setExamState(prev => {
+            const newViolations = prev.violations + 1;
+            syncStudentToFirebase({ ...prev, violations: newViolations }, false);
+            return { ...prev, violations: newViolations };
+          });
+        } else {
+          syncStudentToFirebase(examState, true);
+        }
       }
-      
-      setView('result');
     };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [view, examState, authUser, modal.isOpen]);
 
-    const currentQ = questions[currentIndex];
 
-    return (
-      <div className="min-h-screen bg-gray-50 flex flex-col">
-        {/* Header (Nama & Jam) */}
-        <header className="bg-white shadow-sm p-4 sticky top-0 z-10">
-          <div className="max-w-5xl mx-auto flex justify-between items-center">
-            <div>
-              <h1 className="font-bold text-gray-800">{currentStudent.name}</h1>
-              <p className="text-sm text-gray-500">Soal {currentIndex + 1} dari {questions.length}</p>
+  // ==========================================
+  // HANDLERS
+  // ==========================================
+
+  // --- SECRET LOGIN LOGIC (5 Clicks on Logo) ---
+  const handleSecretLogin = () => {
+    if (view === 'teacher_dashboard' || view === 'teacher_login') return;
+    
+    const newCount = (window.secretClick || 0) + 1;
+    window.secretClick = newCount;
+    
+    if (newCount >= 5) {
+      window.secretClick = 0; // Reset
+      setView('teacher_login'); // Tampilkan form login guru
+    }
+  };
+
+  // --- STUDENT HANDLERS ---
+  const handleStudentLogin = (e) => {
+    e.preventDefault();
+    if (!user.name || !user.class) return;
+    setView('student_waiting');
+    syncStudentToFirebase(examState, true, false); 
+  };
+
+  const handleStudentReady = () => {
+    setIsStudentReady(true);
+    syncStudentToFirebase(examState, true, true);
+  };
+
+  const calculateScore = (answers, questionsArr) => {
+    if (!questionsArr || questionsArr.length === 0) return 0;
+    let correctCount = 0;
+    questionsArr.forEach((q, i) => { if (answers[i] === q.correct) correctCount++; });
+    return Math.round((correctCount / questionsArr.length) * 100);
+  };
+
+  const executeFinish = () => {
+    const finalScore = calculateScore(examState.answers, studentQuestions);
+    const newState = { ...examState, isFinished: true, score: finalScore };
+    setExamState(newState);
+    syncStudentToFirebase(newState, true);
+    clearInterval(timerRef.current);
+    setView('student_result');
+  };
+
+  const handleAutoFinish = (currentState) => {
+    const finalScore = calculateScore(currentState.answers, studentQuestions);
+    const newState = { ...currentState, isFinished: true, score: finalScore, timeLeft: 0 };
+    setExamState(newState);
+    syncStudentToFirebase(newState, true);
+    clearInterval(timerRef.current);
+    setView('student_result');
+  };
+
+  const handleForceReset = () => {
+    localStorage.removeItem('cbt_v2_session');
+    window.location.reload();
+  };
+
+  // --- TEACHER HANDLERS ---
+  const handleTeacherLogin = (e) => {
+    e.preventDefault();
+    const foundTeacher = TEACHERS_DB.find(t => t.username === teacherLoginInput.username && t.password === teacherLoginInput.password);
+    if (foundTeacher) {
+      setActiveTeacher(foundTeacher);
+      setView('teacher_dashboard');
+    } else {
+      setModal({ isOpen: true, type: 'alert', message: 'Username atau Password Guru salah!', inputValue: '' });
+    }
+  };
+
+  const handleTeacherUploadQuestions = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const json = JSON.parse(event.target.result);
+        if (Array.isArray(json)) {
+          const qRef = doc(db, 'artifacts', appId, 'public', 'data', 'questions_bank', activeTeacher.username);
+          await setDoc(qRef, { data: json, updatedAt: Date.now(), subject: activeTeacher.subject });
+          setModal({ isOpen: true, type: 'alert', message: `Berhasil! Soal telah diunggah ke Bank Soal ${activeTeacher.subject}.`, inputValue: '' });
+        } else {
+          setModal({ isOpen: true, type: 'alert', message: 'Format JSON tidak valid. Harus berupa Array.', inputValue: '' });
+        }
+      } catch (err) {
+        setModal({ isOpen: true, type: 'alert', message: 'Gagal membaca file JSON. Pastikan formatnya benar.', inputValue: '' });
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = ''; 
+  };
+
+  const handleStartExamByTeacher = async () => {
+    if (teacherQuestions.length === 0) {
+      setModal({ isOpen: true, type: 'alert', message: 'Anda belum memiliki soal. Silakan upload soal terlebih dahulu di tab Bank Soal.', inputValue: '' });
+      return;
+    }
+
+    const studentsInClass = studentsData.filter(s => s.class === adminSelectedClass);
+    const readyStudents = studentsInClass.filter(s => s.isReady && !s.isFinished);
+    
+    if (readyStudents.length === 0) {
+      setModal({ isOpen: true, type: 'alert', message: `Belum ada siswa yang menekan tombol SIAP di Kelas ${adminSelectedClass}. Tunggu hingga ada yang siap.`, inputValue: '' });
+      return;
+    }
+
+    setModal({
+      isOpen: true, type: 'confirmStart',
+      message: `Mulai ujian ${activeTeacher.subject} untuk Kelas ${adminSelectedClass} sekarang? Seluruh layar siswa yang 'Siap' akan langsung beralih ke halaman soal.`,
+      inputValue: ''
+    });
+  };
+
+  const executeStartExam = async () => {
+    try {
+      const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', adminSelectedClass);
+      await setDoc(sessionRef, {
+        status: 'running',
+        teacherName: activeTeacher.name,
+        subject: activeTeacher.subject,
+        questions: teacherQuestions,
+        duration: 60, // 60 menit default
+        startedAt: Date.now()
+      });
+      setModal({ isOpen: true, type: 'alert', message: `Ujian Kelas ${adminSelectedClass} Berhasil Dimulai!`, inputValue: '' });
+    } catch (e) {
+      console.error(e);
+      setModal({ isOpen: true, type: 'alert', message: 'Gagal memulai ujian. Coba lagi.', inputValue: '' });
+    }
+  };
+
+  const handleStopOrResetClass = async () => {
+    setModal({
+      isOpen: true, type: 'confirmStop',
+      message: `Ketik "STOP" untuk membatalkan/menghentikan ujian berjalan di Kelas ${adminSelectedClass}. Layar siswa akan diretas kembali ke awal.`,
+      inputValue: ''
+    });
+  };
+
+  const executeStopExam = async () => {
+    try {
+      const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', adminSelectedClass);
+      await setDoc(sessionRef, { status: 'waiting' }, { merge: true });
+      setModal({ isOpen: true, type: 'alert', message: `Sesi Ujian Kelas ${adminSelectedClass} dihentikan.`, inputValue: '' });
+    } catch (e) { console.error(e); }
+  };
+
+  // --- MODAL SUBMIT HANDLER ---
+  const closeModal = () => setModal({ isOpen: false, type: '', message: '', inputValue: '' });
+
+  const handleModalSubmit = async () => {
+    const { type, inputValue } = modal;
+    if (type === 'confirmFinish') {
+      closeModal(); executeFinish();
+    } else if (type === 'confirmStart') {
+      closeModal(); executeStartExam();
+    } else if (type === 'confirmStop') {
+      if (inputValue === 'STOP') {
+        closeModal(); executeStopExam();
+      } else {
+        setModal({ isOpen: true, type: 'alert', message: 'Kata kunci salah. Batal dihentikan.', inputValue: '' });
+      }
+    } else if (type === 'alert') {
+      closeModal();
+    }
+  };
+
+  // --- HELPERS ---
+  const formatTime = (seconds) => {
+    const m = Math.floor(seconds / 60); const s = seconds % 60;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  const getStudentRank = () => {
+    if (!authUser || !examState.isFinished) return "-";
+    const studentsInMyClass = studentsData.filter(s => s.class === user.class);
+    const sorted = [...studentsInMyClass].sort((a, b) => b.score - a.score);
+    const index = sorted.findIndex(s => s.id === authUser.uid);
+    return index !== -1 ? index + 1 : "-";
+  };
+
+
+  // ==========================================
+  // RENDER VIEWS
+  // ==========================================
+  return (
+    <div className={`min-h-screen transition-colors duration-500 font-sans relative overflow-hidden ${isDarkMode ? 'bg-slate-900' : 'bg-emerald-50'}`}>
+      
+      {/* Background Decorators */}
+      <div className="fixed top-[-10%] left-[-10%] w-[40vw] h-[40vw] rounded-full bg-emerald-500/20 blur-[100px] pointer-events-none z-0"></div>
+      <div className="fixed bottom-[-10%] right-[-10%] w-[30vw] h-[30vw] rounded-full bg-amber-500/20 blur-[100px] pointer-events-none z-0"></div>
+
+      {/* CUSTOM MODAL UI */}
+      {modal.isOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-200">
+          <Card isDarkMode={isDarkMode} className="w-full max-w-sm p-6 shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className={`font-black text-lg ${modal.type === 'alert' && modal.message.includes('salah') ? 'text-red-500' : 'text-emerald-500'}`}>
+                {modal.type === 'alert' ? 'Pemberitahuan' : 'Konfirmasi'}
+              </h3>
+              <button onClick={closeModal} className={`p-1 rounded-full hover:bg-slate-500/20 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}><X size={20} /></button>
             </div>
-            <div className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold ${timeLeft < 300 ? 'bg-red-100 text-red-600 animate-pulse' : 'bg-blue-100 text-blue-700'}`}>
-              <Clock className="w-5 h-5" />
-              {formatTime(timeLeft)}
-            </div>
-          </div>
-        </header>
-
-        {/* Konten Ujian */}
-        <main className="flex-1 max-w-5xl mx-auto w-full p-4 flex flex-col md:flex-row gap-6 mt-4">
-          
-          {/* Kotak Pertanyaan Utama */}
-          <div className="flex-1 bg-white rounded-xl shadow-sm p-6">
-            <h2 className="text-xl font-medium text-gray-800 mb-6 leading-relaxed">
-              {currentIndex + 1}. {currentQ.text}
-            </h2>
-            <div className="space-y-3">
-              {currentQ.options.map((opt, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => handleSelectOption(currentQ.id, idx)}
-                  className={`w-full text-left p-4 rounded-lg border-2 transition-all ${
-                    answers[currentQ.id] === idx 
-                      ? 'border-green-500 bg-green-50 text-green-800' 
-                      : 'border-gray-200 hover:border-green-300 hover:bg-gray-50 text-gray-700'
-                  }`}
-                >
-                  <span className="inline-block w-8 h-8 text-center leading-8 rounded-full bg-white border mr-3 font-bold">
-                    {String.fromCharCode(65 + idx)}
-                  </span>
-                  {opt}
-                </button>
-              ))}
-            </div>
-
-            {/* Tombol Selanjutnya / Sebelumnya */}
-            <div className="flex justify-between mt-8 pt-6 border-t">
-              <button 
-                disabled={currentIndex === 0}
-                onClick={() => setCurrentIndex(prev => prev - 1)}
-                className="px-6 py-2 rounded-lg font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 disabled:opacity-50 flex items-center gap-2"
-              >
-                <ArrowLeft className="w-4 h-4"/> Sebelumnya
-              </button>
-              
-              {currentIndex === questions.length - 1 ? (
-                <button 
-                  onClick={() => setShowConfirm(true)}
-                  className="px-6 py-2 rounded-lg font-bold text-white bg-green-600 hover:bg-green-700 flex items-center gap-2"
-                >
-                  <CheckCircle className="w-4 h-4"/> Selesai
-                </button>
-              ) : (
-                <button 
-                  onClick={() => setCurrentIndex(prev => prev + 1)}
-                  className="px-6 py-2 rounded-lg font-medium text-white bg-blue-600 hover:bg-blue-700 flex items-center gap-2"
-                >
-                  Selanjutnya <ArrowRight className="w-4 h-4"/>
-                </button>
+            <p className={`mb-6 text-sm ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>{modal.message}</p>
+            {modal.type === 'confirmStop' && (
+              <input autoFocus placeholder="Ketik STOP" className={`w-full p-4 rounded-xl border-2 mb-6 outline-none transition-all ${isDarkMode ? 'bg-slate-900/50 border-slate-700 focus:border-emerald-500 text-white' : 'bg-white/50 border-white focus:border-emerald-500 text-slate-800'}`} value={modal.inputValue} onChange={e => setModal({...modal, inputValue: e.target.value})} onKeyDown={e => { if (e.key === 'Enter') handleModalSubmit(); }} />
+            )}
+            <div className="flex justify-end gap-3">
+              {modal.type !== 'alert' && (
+                <button onClick={closeModal} className={`px-5 py-2.5 rounded-xl font-bold transition-all ${isDarkMode ? 'bg-slate-800 hover:bg-slate-700 text-white' : 'bg-white border-2 border-slate-200 hover:bg-slate-50 text-slate-600'}`}>Batal</button>
               )}
-            </div>
-          </div>
-
-          {/* Sidebar Nomor Soal */}
-          <div className="w-full md:w-64 bg-white rounded-xl shadow-sm p-4 h-fit">
-            <h3 className="font-bold text-gray-700 mb-4 text-center">Navigasi Soal</h3>
-            <div className="grid grid-cols-5 gap-2">
-              {questions.map((q, idx) => (
-                <button
-                  key={q.id}
-                  onClick={() => setCurrentIndex(idx)}
-                  className={`w-10 h-10 rounded-lg flex items-center justify-center font-medium text-sm border
-                    ${currentIndex === idx ? 'ring-2 ring-blue-500 border-transparent' : ''}
-                    ${answers[q.id] !== undefined ? 'bg-green-500 text-white border-transparent' : 'bg-gray-50 text-gray-600 hover:bg-gray-200'}
-                  `}
-                >
-                  {idx + 1}
-                </button>
-              ))}
-            </div>
-            <div className="mt-6">
-              <button 
-                onClick={() => setShowConfirm(true)}
-                className="w-full py-2 bg-red-100 text-red-600 font-bold rounded-lg hover:bg-red-200"
-              >
-                Akhiri Ujian
+              <button onClick={handleModalSubmit} className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold transition-all shadow-lg shadow-emerald-500/30">
+                {modal.type === 'alert' ? 'Mengerti' : 'Ya, Lanjutkan'}
               </button>
             </div>
-          </div>
-        </main>
-
-        {/* Modal Konfirmasi Akhiri Ujian */}
-        {showConfirm && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-xl p-6 max-w-sm w-full text-center">
-              <h3 className="text-xl font-bold mb-2">Selesai Mengerjakan?</h3>
-              <p className="text-gray-600 mb-6">Pastikan semua soal telah terjawab. Waktu Anda masih {formatTime(timeLeft)}.</p>
-              <div className="flex gap-4">
-                <button onClick={() => setShowConfirm(false)} className="flex-1 py-2 bg-gray-100 rounded-lg font-medium text-gray-700 hover:bg-gray-200">Batal</button>
-                <button onClick={submitQuiz} className="flex-1 py-2 bg-green-600 rounded-lg font-medium text-white hover:bg-green-700">Ya, Selesai</button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // ==========================================================
-  // KOMPONEN 5: HASIL UJIAN SISWA
-  // ==========================================================
-  const ResultView = () => {
-    // Cari nilai siswa saat ini di array hasil ujian
-    const myResult = results.find(r => r.id === currentStudent.id) || results[results.length - 1];
-
-    return (
-      <div className="min-h-screen bg-green-50 flex items-center justify-center p-4">
-        <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md text-center">
-          <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6">
-            <CheckCircle className="text-green-500 w-12 h-12" />
-          </div>
-          <h2 className="text-3xl font-bold text-gray-800 mb-2">Ujian Selesai!</h2>
-          <p className="text-gray-600 mb-6">Terima kasih telah mengerjakan, {myResult?.name || currentStudent.name}.</p>
-          
-          <div className="bg-gray-50 rounded-xl p-6 mb-6">
-            <p className="text-sm text-gray-500 uppercase tracking-wide font-bold mb-1">Nilai Anda</p>
-            <p className="text-6xl font-black text-green-600">{myResult?.score || "..."}</p>
-            <p className="text-gray-500 mt-2">Benar {myResult?.correctAnswers || "..."} dari {myResult?.totalQuestions || "..."} Soal</p>
-          </div>
-
-          <button 
-            onClick={clearSession}
-            className="w-full py-3 bg-gray-800 hover:bg-gray-900 text-white font-bold rounded-lg transition"
-          >
-            Kembali ke Beranda
-          </button>
+          </Card>
         </div>
-      </div>
-    );
-  };
+      )}
 
-  // ==========================================================
-  // KOMPONEN 6: LOGIN GURU
-  // ==========================================================
-  const TeacherLoginView = () => {
-    const [pwd, setPwd] = useState('');
-    const [error, setError] = useState(false);
-
-    const handleLogin = (e) => {
-      e.preventDefault();
-      // Password standar untuk Guru
-      if(pwd === 'guru123') {
-        setView('teacher-dashboard');
-        setPwd(''); 
-      } else {
-        setError(true);
-      }
-    };
-
-    return (
-      <div className="min-h-screen bg-blue-50 flex items-center justify-center p-4">
-        <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md">
-          <button onClick={clearSession} className="text-gray-500 mb-4 flex items-center gap-1 hover:text-gray-800">
-            <ArrowLeft className="w-4 h-4"/> Kembali
-          </button>
-          <div className="flex items-center gap-3 mb-6">
-            <div className="p-2 bg-blue-100 rounded-lg text-blue-600"><LayoutDashboard className="w-6 h-6"/></div>
-            <h2 className="text-2xl font-bold text-gray-800">Login Admin (Guru)</h2>
+      {/* NAVBAR */}
+      <nav className={`relative z-50 p-4 flex justify-between items-center backdrop-blur-md border-b print:hidden ${isDarkMode ? 'border-slate-800 bg-slate-900/50' : 'border-emerald-200/50 bg-white/30'}`}>
+        {/* LOGO - HIDDEN TRIGGER FOR TEACHER LOGIN (5 CLICKS) */}
+        <div className="flex items-center gap-3 select-none cursor-pointer group" onClick={handleSecretLogin}>
+          <div className={`p-2.5 rounded-xl shadow-lg group-active:scale-95 transition-transform ${isDarkMode ? 'bg-emerald-600 shadow-emerald-900/50' : 'bg-emerald-600 shadow-emerald-500/30'}`}>
+            <BookOpen size={22} className="text-white" />
           </div>
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div>
-              <label className="block text-gray-700 text-sm font-bold mb-2">Password Akses</label>
-              <input 
-                type="password" 
-                required 
-                value={pwd} 
-                onChange={(e) => {setPwd(e.target.value); setError(false);}} 
-                className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:border-blue-500" 
-                placeholder="Masukkan password..." 
-              />
-              {error && <p className="text-red-500 text-sm mt-1">Password salah! (Gunakan: guru123)</p>}
-            </div>
-            <button type="submit" className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg mt-4">
-              Masuk Dashboard
-            </button>
-          </form>
-        </div>
-      </div>
-    );
-  };
-
-  // ==========================================================
-  // KOMPONEN 7: DASHBOARD GURU (REKAP & PANTAU)
-  // ==========================================================
-  const TeacherDashboardView = () => {
-    const [tab, setTab] = useState('hasil'); 
-
-    return (
-      <div className="min-h-screen bg-gray-100 flex flex-col md:flex-row print:bg-white">
-        {/* Sidebar Kiri (Sembunyi saat di-print) */}
-        <div className="w-full md:w-64 bg-white shadow-lg md:min-h-screen flex flex-col print:hidden">
-          <div className="p-6 border-b">
-            <h2 className="text-xl font-bold text-blue-600 flex items-center gap-2">
-              <LayoutDashboard className="w-6 h-6"/> CBT Admin
-            </h2>
-          </div>
-          <nav className="flex-1 p-4 space-y-2 flex md:flex-col overflow-x-auto md:overflow-visible">
-            <button onClick={() => setTab('hasil')} className={`flex items-center gap-2 w-full text-left px-4 py-3 rounded-lg font-medium whitespace-nowrap ${tab === 'hasil' ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-50'}`}>
-              <CheckCircle className="w-5 h-5"/> Hasil Nilai Siswa
-            </button>
-            <button onClick={() => setTab('pantau')} className={`flex items-center gap-2 w-full text-left px-4 py-3 rounded-lg font-medium whitespace-nowrap ${tab === 'pantau' ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-50'}`}>
-              <Users className="w-5 h-5"/> Pantau Ujian
-            </button>
-          </nav>
-          <div className="p-4 border-t">
-            <button onClick={clearSession} className="flex items-center gap-2 w-full text-left px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg font-medium">
-              <LogOut className="w-5 h-5"/> Keluar
-            </button>
+          <div>
+            <h1 className={`font-black text-xl tracking-tight leading-none ${isDarkMode ? 'text-white' : 'text-emerald-950'}`}>CBT <span className="text-emerald-500">PRO</span></h1>
+            <p className="text-[10px] uppercase tracking-widest opacity-60 font-bold">Smart Exam System</p>
           </div>
         </div>
-
-        {/* Area Konten Utama */}
-        <div className="flex-1 p-6 md:p-8 overflow-y-auto print:p-0 print:overflow-visible">
-          
-          {/* PERINGATAN BILA DATABASE FIREBASE BELUM DIISI */}
-          {!isDbReady && (
-            <div className="bg-orange-100 border-l-4 border-orange-500 text-orange-700 p-4 mb-6 rounded-lg print:hidden flex items-start gap-3">
-              <AlertTriangle className="w-6 h-6 shrink-0"/>
-              <div>
-                <p className="font-bold">Mode Offline Vercel</p>
-                <p className="text-sm">Anda belum menyambungkan Firebase Database. Data dari HP siswa tidak akan muncul di sini. Silakan ikuti <span className="font-bold">Panduan Konfigurasi Firebase</span> yang diberikan oleh AI untuk menyambungkannya.</p>
-              </div>
+        
+        <div className="flex items-center gap-4">
+          {view === 'student_exam' && (
+            <div className={`hidden md:flex items-center gap-2 px-4 py-2 rounded-full font-bold font-mono text-lg border ${examState.timeLeft < 300 ? 'bg-red-500/10 text-red-500 border-red-500/30 animate-pulse' : isDarkMode ? 'bg-slate-800 border-slate-700 text-emerald-400' : 'bg-white border-emerald-100 text-emerald-600'}`}>
+              <Clock size={20} />{formatTime(examState.timeLeft)}
             </div>
           )}
+          <button type="button" onClick={() => setIsDarkMode(!isDarkMode)} className={`p-2.5 rounded-full transition-all hover:scale-110 active:scale-95 ${isDarkMode ? 'bg-slate-800 text-amber-400 hover:bg-slate-700' : 'bg-white text-slate-600 hover:bg-emerald-100 shadow-sm'}`}>
+            {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
+          </button>
+        </div>
+      </nav>
 
-          {/* TAB: HASIL NILAI SISWA */}
-          {tab === 'hasil' && (
-            <div className="bg-white rounded-xl shadow-sm border p-6 print:shadow-none print:border-none print:p-0">
-              
-              {/* KOP SURAT (Hanya muncul di kertas PDF saat di-print) */}
-              <div className="hidden print:block mb-8 text-center text-black">
-                <h2 className="text-2xl font-bold uppercase">Laporan Hasil Ujian CBT</h2>
-                <h3 className="text-xl font-semibold">Madrasah Tsanawiyah - Kelas 9</h3>
-                <div className="border-b-4 border-black mt-4 mb-6"></div>
+      {/* MAIN CONTENT AREA */}
+      <div className="relative z-10">
+        
+        {/* ========================================================= */}
+        {/* VIEW 1: STUDENT LOGIN (DEFAULT) */}
+        {/* ========================================================= */}
+        {view === 'student_login' && (
+          <main className="flex flex-col items-center justify-center min-h-[calc(100vh-80px)] p-6">
+            <Card isDarkMode={isDarkMode} className="w-full max-w-md p-8 sm:p-10 animate-in zoom-in-95 duration-300">
+              <div className="text-center mb-8">
+                <div className="inline-flex justify-center items-center w-16 h-16 rounded-full bg-emerald-500/10 text-emerald-500 mb-4"><User size={32} /></div>
+                <h2 className={`text-2xl font-black mb-2 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Login Peserta</h2>
               </div>
-
-              {/* Judul & Tombol Print (Sembunyi saat di-print) */}
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 print:hidden gap-4">
-                <h3 className="text-xl font-bold text-gray-800">Rekap Nilai Siswa</h3>
-                <button 
-                  onClick={() => window.print()}
-                  className="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg flex items-center gap-2 transition"
-                >
-                  <Printer className="w-5 h-5" /> Cetak / Simpan PDF
+              <form onSubmit={handleStudentLogin} className="space-y-5">
+                <div>
+                  <label className={`block text-xs font-bold mb-2 uppercase tracking-wider opacity-70 ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>Nama Lengkap</label>
+                  <input required type="text" value={user.name} onChange={(e) => setUser({...user, name: e.target.value})} className={`w-full p-4 rounded-2xl outline-none transition-all border-2 ${isDarkMode ? 'bg-slate-900/50 border-slate-700 focus:border-emerald-500 text-white' : 'bg-white/50 border-white focus:border-emerald-500 text-slate-800'}`} placeholder="Contoh: Ahmad Fulan" />
+                </div>
+                <div>
+                  <label className={`block text-xs font-bold mb-2 uppercase tracking-wider opacity-70 ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>Kelas / Rombel</label>
+                  <select required value={user.class} onChange={(e) => setUser({...user, class: e.target.value})} className={`w-full p-4 rounded-2xl outline-none transition-all border-2 appearance-none ${isDarkMode ? 'bg-slate-900/50 border-slate-700 focus:border-emerald-500 text-white' : 'bg-white/50 border-white focus:border-emerald-500 text-slate-800'}`}>
+                    <option value="" disabled>Pilih Kelas</option>
+                    <option value="7A">Kelas 7A</option><option value="7B">Kelas 7B</option>
+                    <option value="8A">Kelas 8A</option><option value="8B">Kelas 8B</option>
+                  </select>
+                </div>
+                <button type="submit" className="w-full mt-6 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-lg p-4 rounded-2xl shadow-xl transition-all active:scale-95 flex justify-center items-center gap-2">
+                  Masuk Ruang Tunggu <ChevronRight />
                 </button>
-              </div>
+              </form>
+            </Card>
+          </main>
+        )}
 
-              {/* Tabel Nilai */}
-              {results.length === 0 ? (
-                <div className="text-center py-10 text-gray-500 print:hidden">Belum ada nilai yang masuk.</div>
+        {/* ========================================================= */}
+        {/* VIEW 2: TEACHER LOGIN (HIDDEN, TRIGGERED BY 5 CLICKS) */}
+        {/* ========================================================= */}
+        {view === 'teacher_login' && (
+          <main className="flex flex-col items-center justify-center min-h-[calc(100vh-80px)] p-6">
+            <button onClick={() => setView('student_login')} className={`self-start md:self-auto md:absolute md:top-24 md:left-8 mb-4 flex items-center gap-2 text-sm font-bold opacity-60 hover:opacity-100 transition-opacity ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>
+              <ChevronLeft size={16}/> Kembali ke Login Peserta
+            </button>
+            <Card isDarkMode={isDarkMode} className="w-full max-w-md p-8 sm:p-10 animate-in zoom-in-95 duration-300">
+              <div className="text-center mb-8">
+                <div className="inline-flex justify-center items-center w-16 h-16 rounded-full bg-blue-500/10 text-blue-500 mb-4"><KeySquare size={32} /></div>
+                <h2 className={`text-2xl font-black mb-2 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Login Pengawas</h2>
+                <p className="text-xs opacity-60 mt-2">(Hint: guru_pai/123, guru_mtk/123)</p>
+              </div>
+              <form onSubmit={handleTeacherLogin} className="space-y-5">
+                <div>
+                  <label className={`block text-xs font-bold mb-2 uppercase tracking-wider opacity-70 ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>Username</label>
+                  <input required type="text" value={teacherLoginInput.username} onChange={(e) => setTeacherLoginInput({...teacherLoginInput, username: e.target.value})} className={`w-full p-4 rounded-2xl outline-none transition-all border-2 ${isDarkMode ? 'bg-slate-900/50 border-slate-700 focus:border-blue-500 text-white' : 'bg-white/50 border-white focus:border-blue-500 text-slate-800'}`} placeholder="Masukkan Username" />
+                </div>
+                <div>
+                  <label className={`block text-xs font-bold mb-2 uppercase tracking-wider opacity-70 ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>Password</label>
+                  <input required type="password" value={teacherLoginInput.password} onChange={(e) => setTeacherLoginInput({...teacherLoginInput, password: e.target.value})} className={`w-full p-4 rounded-2xl outline-none transition-all border-2 ${isDarkMode ? 'bg-slate-900/50 border-slate-700 focus:border-blue-500 text-white' : 'bg-white/50 border-white focus:border-blue-500 text-slate-800'}`} placeholder="••••••••" />
+                </div>
+                <button type="submit" className="w-full mt-6 bg-blue-600 hover:bg-blue-500 text-white font-bold text-lg p-4 rounded-2xl shadow-xl transition-all active:scale-95 flex justify-center items-center gap-2">
+                  Akses Dashboard <ChevronRight />
+                </button>
+              </form>
+            </Card>
+          </main>
+        )}
+
+        {/* ========================================================= */}
+        {/* VIEW 3: WAITING ROOM (STUDENT) */}
+        {/* ========================================================= */}
+        {view === 'student_waiting' && (
+          <main className="flex flex-col items-center justify-center min-h-[calc(100vh-80px)] p-6 text-center animate-in fade-in duration-500">
+            <Card isDarkMode={isDarkMode} className="w-full max-w-lg p-10 flex flex-col items-center">
+              
+              {!isStudentReady ? (
+                <>
+                  <div className="w-24 h-24 rounded-full bg-amber-500/10 text-amber-500 flex items-center justify-center mb-6"><AlertCircle size={48} /></div>
+                  <h2 className={`text-2xl font-black mb-2 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Persiapan Ujian</h2>
+                  <p className={`mb-8 opacity-70 ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>
+                    Halo <strong>{user.name}</strong> (Kelas {user.class}). Sebelum ujian dimulai, pastikan koneksi internet Anda stabil. Tekan tombol di bawah jika Anda sudah siap.
+                  </p>
+                  <button onClick={handleStudentReady} className="w-full py-5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xl shadow-lg shadow-emerald-500/30 transition-transform active:scale-95">
+                    SAYA SIAP!
+                  </button>
+                </>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse border border-gray-200 print:border-black">
-                    <thead>
-                      <tr className="bg-gray-50 border-b border-gray-200 print:border-black print:bg-gray-100">
-                        <th className="p-3 border-r print:border-black">No</th>
-                        <th className="p-3 border-r print:border-black">Waktu Selesai</th>
-                        <th className="p-3 border-r print:border-black">Nama Siswa</th>
-                        <th className="p-3 border-r print:border-black text-center">Jawaban Benar</th>
-                        <th className="p-3 print:border-black text-center">Nilai Akhir</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {results.map((r, idx) => (
-                        <tr key={idx} className="border-b border-gray-200 hover:bg-gray-50 print:border-black">
-                          <td className="p-3 border-r print:border-black">{idx + 1}</td>
-                          <td className="p-3 text-sm text-gray-500 border-r print:border-black print:text-black">{r.date}</td>
-                          <td className="p-3 font-medium border-r print:border-black print:text-black">{r.name}</td>
-                          <td className="p-3 border-r text-center print:border-black">{r.correctAnswers} / {r.totalQuestions}</td>
-                          <td className="p-3 text-center print:border-black">
-                            {/* Warna hijau bila di atas 75, Merah bila di bawah. Transparan saat diprint. */}
-                            <span className={`px-3 py-1 rounded-full text-sm font-bold ${r.score >= 75 ? 'bg-green-100 text-green-700 print:bg-transparent print:text-black print:border' : 'bg-red-100 text-red-700 print:bg-transparent print:text-black print:border'}`}>
-                              {r.score}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  
-                  {/* Kolom Tanda Tangan Guru (Hanya muncul di kertas PDF) */}
-                  <div className="hidden print:flex justify-end mt-16 text-black pr-8">
-                    <div className="text-center">
-                      <p className="mb-16">Mengetahui,<br/>Guru Mata Pelajaran</p>
-                      <p className="font-bold underline">___________________________</p>
-                    </div>
+                <>
+                  <div className="relative w-32 h-32 mb-8 flex items-center justify-center">
+                    <div className="absolute inset-0 bg-emerald-500/20 rounded-full animate-ping"></div>
+                    <div className="absolute inset-2 bg-emerald-500/30 rounded-full animate-pulse"></div>
+                    <div className="relative z-10 w-20 h-20 bg-emerald-500 rounded-full flex items-center justify-center text-white shadow-lg"><Clock size={40} /></div>
+                  </div>
+                  <h2 className={`text-2xl font-black mb-2 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Menunggu Pengawas...</h2>
+                  <p className={`opacity-70 ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>
+                    Status Anda sudah <strong className="text-emerald-500">SIAP</strong>. <br/>
+                    Ujian akan otomatis dimulai di layar ini ketika guru pengawas menekan tombol mulai untuk Kelas {user.class}.
+                  </p>
+                </>
+              )}
+
+            </Card>
+          </main>
+        )}
+
+        {/* ========================================================= */}
+        {/* VIEW 4: EXAM (STUDENT) */}
+        {/* ========================================================= */}
+        {view === 'student_exam' && (
+          <main className="max-w-7xl mx-auto p-4 md:p-6 lg:p-8 grid grid-cols-1 lg:grid-cols-4 gap-6 animate-in fade-in duration-500">
+            <div className="lg:col-span-3 space-y-6 flex flex-col">
+              <Card isDarkMode={isDarkMode} className="p-6 sm:p-8 lg:p-10 flex-grow flex flex-col">
+                <div className="flex justify-between items-center mb-8 pb-6 border-b border-emerald-500/10">
+                  <div className="flex items-center gap-3">
+                    <span className="bg-emerald-500 text-white px-4 py-1.5 rounded-full text-sm font-bold">Soal No. {examState.currentIdx + 1}</span>
+                    <span className={`text-sm font-medium opacity-60 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>dari {studentQuestions.length} Soal</span>
+                  </div>
+                  <div className={`md:hidden flex items-center gap-2 px-3 py-1.5 rounded-full font-bold font-mono text-sm border ${examState.timeLeft < 300 ? 'bg-red-500/10 text-red-500 border-red-500/30 animate-pulse' : isDarkMode ? 'bg-slate-800 border-slate-700 text-emerald-400' : 'bg-white border-emerald-100 text-emerald-600'}`}>
+                    <Clock size={16} />{formatTime(examState.timeLeft)}
                   </div>
                 </div>
-              )}
-            </div>
-          )}
-
-          {/* TAB: PANTAU UJIAN LIVE */}
-          {tab === 'pantau' && (
-            <div className="bg-white rounded-xl shadow-sm border p-6">
-              <h3 className="text-xl font-bold mb-6 text-gray-800 flex items-center justify-between">
-                <span>Status Siswa Aktif</span>
-                <span className="bg-blue-100 text-blue-800 text-sm py-1 px-3 rounded-full">{activeStudents.length} Online</span>
-              </h3>
-              {activeStudents.length === 0 ? (
-                <div className="text-center py-10 text-gray-500">Tidak ada siswa yang sedang online saat ini.</div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {activeStudents.map((s, idx) => (
-                    <div key={idx} className="border rounded-lg p-4 flex items-start gap-4 shadow-sm bg-white">
-                      <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center text-gray-500 font-bold">
-                        {s.name.charAt(0).toUpperCase()}
-                      </div>
-                      <div>
-                        <p className="font-bold text-gray-800">{s.name}</p>
-                        <div className="mt-2 flex items-center gap-2">
-                          <span className="relative flex h-3 w-3">
-                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                            <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
-                          </span>
-                          <span className="text-xs font-medium text-green-600">{s.status} (Mulai: {s.startTime})</span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+                <h3 className={`text-xl sm:text-2xl font-medium leading-relaxed mb-10 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>{studentQuestions[examState.currentIdx]?.q}</h3>
+                <div className="grid gap-4 mt-auto">
+                  {studentQuestions[examState.currentIdx]?.a.map((ans, i) => {
+                    const isSelected = examState.answers[examState.currentIdx] === i;
+                    return (
+                      <button key={i} type="button" onClick={() => setExamState({...examState, answers: {...examState.answers, [examState.currentIdx]: i}})} className={`group flex items-center gap-4 p-4 sm:p-5 rounded-2xl border-2 transition-all text-left ${isSelected ? 'border-emerald-500 bg-emerald-500/10' : isDarkMode ? 'border-slate-700 bg-slate-800/50 hover:border-emerald-500/50' : 'border-white bg-white/50 hover:border-emerald-300'}`}>
+                        <span className={`w-10 h-10 flex-shrink-0 flex items-center justify-center rounded-xl font-bold text-lg ${isSelected ? 'bg-emerald-500 text-white' : isDarkMode ? 'bg-slate-700 text-slate-300 group-hover:bg-slate-600' : 'bg-emerald-100 text-emerald-700 group-hover:bg-emerald-200'}`}>{String.fromCharCode(65 + i)}</span>
+                        <span className={`text-base sm:text-lg ${isSelected ? 'font-medium' : ''} ${isDarkMode ? 'text-slate-200' : 'text-slate-700'}`}>{ans}</span>
+                      </button>
+                    );
+                  })}
                 </div>
-              )}
+              </Card>
+              <div className="flex justify-between items-center gap-4">
+                <button type="button" disabled={examState.currentIdx === 0} onClick={() => setExamState({...examState, currentIdx: examState.currentIdx - 1})} className={`flex-1 sm:flex-none flex justify-center items-center gap-2 px-6 py-4 rounded-2xl font-bold transition-all ${examState.currentIdx === 0 ? 'opacity-40 cursor-not-allowed bg-slate-500/20' : isDarkMode ? 'bg-slate-800 text-white' : 'bg-white text-slate-700'}`}>
+                  <ChevronLeft size={20} /> <span className="hidden sm:inline">Sebelumnya</span>
+                </button>
+                {examState.currentIdx === studentQuestions.length - 1 ? (
+                  <button type="button" onClick={() => setModal({ isOpen: true, type: 'confirmFinish', message: 'Kumpulkan jawaban sekarang? Jawaban tidak bisa diubah lagi.', inputValue: '' })} className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-8 py-4 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-900 font-black transition-all">
+                    Selesai & Kumpul <Send size={20} />
+                  </button>
+                ) : (
+                  <button type="button" onClick={() => setExamState({...examState, currentIdx: examState.currentIdx + 1})} className={`flex-1 sm:flex-none flex justify-center items-center gap-2 px-6 py-4 rounded-2xl font-bold transition-all ${isDarkMode ? 'bg-slate-800 text-white' : 'bg-white text-slate-700'}`}>
+                    <span className="hidden sm:inline">Berikutnya</span> <ChevronRight size={20} />
+                  </button>
+                )}
+              </div>
             </div>
-          )}
-        </div>
-      </div>
-    );
-  };
 
-  // --- ROUTING SEDERHANA UNTUK GANTI HALAMAN ---
-  switch(view) {
-    case 'home': return <HomeView />;
-    case 'student-login': return <StudentLoginView />;
-    case 'student-dashboard': return <StudentDashboardView />;
-    case 'quiz': return <QuizView />;
-    case 'result': return <ResultView />;
-    case 'teacher-login': return <TeacherLoginView />;
-    case 'teacher-dashboard': return <TeacherDashboardView />;
-    default: return <HomeView />;
-  }
-}
+            <div className="lg:col-span-1">
+              <Card isDarkMode={isDarkMode} className="p-6 sticky top-24">
+                <div className="flex items-center gap-2 mb-6 pb-4 border-b border-emerald-500/10"><LayoutGrid size={20} className="text-emerald-500"/><h4 className="font-bold text-lg">Navigasi Soal</h4></div>
+                <div className="grid grid-cols-5 sm:grid-cols-8 lg:grid-cols-4 gap-2 mb-8">
+                  {studentQuestions.map((_, i) => {
+                    const isAnswered = examState.answers[i] !== undefined; const isActive = examState.currentIdx === i;
+                    return (
+                      <button key={i} type="button" onClick={() => setExamState({...examState, currentIdx: i})} className={`aspect-square rounded-xl flex items-center justify-center font-bold text-sm transition-all relative ${isActive ? 'ring-4 ring-emerald-500/50 scale-110 z-10' : ''} ${isAnswered ? 'bg-emerald-500 text-white' : isDarkMode ? 'bg-slate-800 text-slate-400 border border-slate-700' : 'bg-white text-slate-500 border border-emerald-100'}`}>
+                        {i + 1}{isAnswered && !isActive && (<div className={`absolute -top-1 -right-1 w-2.5 h-2.5 bg-amber-400 rounded-full border-2 ${isDarkMode ? 'border-slate-800' : 'border-white'}`}></div>)}
+                      </button>
+                    )
+                  })}
+                </div>
+              </Card>
+            </div>
+          </main>
+        )}
+
+        {/* ========================================================= */}
+        {/* VIEW 5: RESULT (STUDENT) */}
+        {/* ========================================================= */}
+        {view === 'student_result' && (
+          <main className="flex items-center justify-center min-h-[calc(100vh-80px)] p-6 animate-in zoom-in-95 duration-700">
+            <Card isDarkMode={isDarkMode} className="w-full max-w-lg p-10 text-center relative overflow-hidden">
+               <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-emerald-400 via-gold-400 to-emerald-400"></div>
+               <div className="w-24 h-24 bg-emerald-500/10 text-emerald-500 rounded-full flex items-center justify-center mx-auto mb-6"><CheckCircle2 size={50} strokeWidth={2.5} /></div>
+               <h2 className={`text-3xl font-black mb-2 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Ujian Selesai!</h2>
+               <p className={`mb-8 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Alhamdulillah, ujian <strong>{activeSession?.subject || 'CBT'}</strong> telah berhasil diselesaikan oleh <strong className={isDarkMode ? 'text-white' : 'text-slate-800'}>{user.name}</strong>.</p>
+               
+               <div className="grid grid-cols-2 gap-4 mb-10">
+                 <div className={`p-6 rounded-3xl border ${isDarkMode ? 'bg-slate-800/50 border-slate-700' : 'bg-white/50 border-emerald-100'}`}>
+                   <p className="text-xs font-bold uppercase tracking-wider opacity-60 mb-2">Nilai Akhir</p>
+                   <p className="text-5xl font-black text-emerald-500">{examState.score}</p>
+                 </div>
+                 <div className={`p-6 rounded-3xl border ${isDarkMode ? 'bg-slate-800/50 border-slate-700' : 'bg-white/50 border-emerald-100'}`}>
+                   <p className="text-xs font-bold uppercase tracking-wider opacity-60 mb-2">Peringkat Kelas</p>
+                   <p className="text-5xl font-black text-amber-500">#{getStudentRank()}</p>
+                 </div>
+               </div>
+               <button type="button" onClick={handleForceReset} className="w-full bg-slate-800 hover:bg-slate-700 text-white p-4 rounded-2xl font-bold flex items-center justify-center gap-2"><LogOut size={18}/> Keluar / Kembali ke Awal</button>
+            </Card>
+          </main>
+        )}
+
+        {/* ========================================================= */}
+        {/* VIEW 6: TEACHER DASHBOARD */}
+        {/* ========================================================= */}
+        {view === 'teacher_dashboard' && activeTeacher && (
+          <main className="p-4 md:p-8 max-w-7xl mx-auto space-y-6 animate-in slide-in-from-bottom-8">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 print:hidden border-b pb-6 mb-8 border-emerald-500/20">
+               <div>
+                 <h2 className={`text-3xl font-black flex items-center gap-3 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>
+                   <ShieldAlert className="text-blue-500" size={32} />
+                   Console <span className="text-blue-500">Guru</span>
+                 </h2>
+                 <p className={`text-sm mt-2 font-medium ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>
+                   Selamat Datang, <strong>{activeTeacher.name}</strong> <br/>
+                   <span className="opacity-70">Pengampu Mata Pelajaran: {activeTeacher.subject}</span>
+                 </p>
+               </div>
+               
+               <div className="flex gap-2">
+                 <label className="cursor-pointer flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-lg">
+                   <Upload size={16}/> Upload Bank Soal (.json)
+                   <input type="file" accept=".json" className="hidden" onChange={handleTeacherUploadQuestions} />
+                 </label>
+                 <button type="button" onClick={handleForceReset} className="flex items-center gap-2 bg-red-500 hover:bg-red-600 text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-all"><LogOut size={16}/> Logout</button>
+               </div>
+            </div>
+
+            <Card isDarkMode={isDarkMode} className="p-6 mb-8 border-l-4 border-l-blue-500 print:hidden">
+              <div className="flex flex-col md:flex-row justify-between items-center gap-6">
+                <div className="w-full md:w-1/3">
+                  <label className="block text-xs font-bold mb-2 uppercase tracking-wider opacity-70">Pilih Kelas Ujian</label>
+                  <select value={adminSelectedClass} onChange={(e) => setAdminSelectedClass(e.target.value)} className={`w-full p-4 rounded-xl outline-none border-2 font-bold text-lg ${isDarkMode ? 'bg-slate-900/50 border-slate-700 text-white' : 'bg-white/50 border-slate-200 text-slate-800'}`}>
+                    <option value="7A">Kelas 7A</option><option value="7B">Kelas 7B</option>
+                    <option value="8A">Kelas 8A</option><option value="8B">Kelas 8B</option>
+                  </select>
+                </div>
+                
+                <div className="flex-1 text-center">
+                  <p className="text-xs font-bold mb-1 uppercase tracking-wider opacity-70">Status Soal Anda</p>
+                  {teacherQuestions.length > 0 ? (
+                    <span className="inline-block px-4 py-2 rounded-lg bg-emerald-500/20 text-emerald-600 font-bold border border-emerald-500/30">
+                      Tersedia {teacherQuestions.length} Soal
+                    </span>
+                  ) : (
+                    <span className="inline-block px-4 py-2 rounded-lg bg-red-500/20 text-red-600 font-bold border border-red-500/30">
+                      Bank Soal Kosong
+                    </span>
+                  )}
+                </div>
+
+                <div className="w-full md:w-1/3 flex justify-end">
+                  <button type="button" onClick={handleStartExamByTeacher} className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-4 rounded-xl text-lg font-black transition-all shadow-lg shadow-emerald-600/30 animate-pulse hover:animate-none">
+                    <PlayCircle size={24}/> MULAI UJIAN KELAS INI
+                  </button>
+                </div>
+              </div>
+            </Card>
+
+            <div className="flex justify-between items-end mb-4 print:hidden">
+              <h3 className={`font-bold text-xl ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Live Monitoring: Kelas {adminSelectedClass}</h3>
+              <button onClick={handleStopOrResetClass} className="text-xs text-red-500 hover:underline font-bold">Batalkan / Hentikan Ujian Kelas Ini</button>
+            </div>
+
+            <Card isDarkMode={isDarkMode} className="overflow-x-auto print:shadow-none print:border-none print:bg-transparent">
+              <table className="w-full text-left border-collapse min-w-[800px]">
+                <thead className={`text-xs uppercase tracking-wider ${isDarkMode ? 'bg-slate-800/80 text-slate-400' : 'bg-blue-100/50 text-blue-800'} print:bg-gray-200 print:text-black`}>
+                  <tr><th className="p-5 font-bold border-b">No</th><th className="p-5 font-bold border-b">Nama Siswa</th><th className="p-5 font-bold border-b">Status Kesiapan</th><th className="p-5 font-bold border-b">Progress Ujian</th><th className="p-5 font-bold text-center border-b">Pelanggaran</th><th className="p-5 font-bold text-right border-b">Nilai Live</th></tr>
+                </thead>
+                <tbody className={`divide-y ${isDarkMode ? 'divide-slate-700/50' : 'divide-slate-100'}`}>
+                  {studentsData.filter(s => s.class === adminSelectedClass).length === 0 ? (
+                    <tr><td colSpan="6" className="p-8 text-center opacity-50 italic">Belum ada siswa dari Kelas {adminSelectedClass} yang masuk ke sistem.</td></tr>
+                  ) : (
+                    studentsData.filter(s => s.class === adminSelectedClass).map((student, idx) => {
+                      const timeSinceLastActive = Date.now() - (student.lastActive || 0);
+                      const isOffline = timeSinceLastActive > 15000 && !student.isFinished; 
+                      const isDanger = student.violations > 0 || (!student.isTabActive && !student.isFinished);
+                      const progressPercent = Math.round((student.progress / (teacherQuestions.length || 1)) * 100);
+
+                      return (
+                        <tr key={student.id} className={`transition-colors ${isDarkMode ? 'hover:bg-slate-800/50' : 'hover:bg-white/50'}`}>
+                          <td className="p-5 font-bold opacity-50">{idx + 1}</td>
+                          <td className="p-5">
+                            <p className="font-bold text-base">{student.name}</p>
+                            <div className="flex items-center gap-2 mt-1">
+                              {student.isFinished ? (<span className="text-[10px] uppercase font-bold text-emerald-500">Selesai</span>) : isOffline ? (<><span className="w-2 h-2 rounded-full bg-slate-500"></span><span className="text-[10px] uppercase font-bold text-slate-500">Offline</span></>) : isDanger ? (<><span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span><span className="text-[10px] uppercase font-bold text-red-500">Meninggalkan Tab</span></>) : (<><span className="w-2 h-2 rounded-full bg-emerald-500"></span><span className="text-[10px] uppercase font-bold text-emerald-500">Online</span></>)}
+                            </div>
+                          </td>
+                          <td className="p-5">
+                            {student.isFinished ? (
+                               <span className="flex items-center gap-2 text-xs font-bold text-emerald-500"><CheckCircle2 size={16}/> Selesai</span>
+                            ) : student.isReady ? (
+                               <span className="flex items-center gap-2 text-xs font-bold text-emerald-500 bg-emerald-500/10 px-3 py-1.5 rounded-lg w-fit"><UserCheck size={16}/> SIAP UJIAN</span>
+                            ) : (
+                               <span className="flex items-center gap-2 text-xs font-bold text-amber-500 bg-amber-500/10 px-3 py-1.5 rounded-lg w-fit"><UserX size={16}/> BELUM SIAP</span>
+                            )}
+                          </td>
+                          <td className="p-5">
+                            {!student.isFinished && student.isReady && (
+                              <div className="flex items-center gap-3">
+                                <div className={`w-full max-w-[150px] h-2.5 rounded-full overflow-hidden ${isDarkMode ? 'bg-slate-700' : 'bg-slate-200'}`}>
+                                  <div className="h-full rounded-full bg-blue-500 transition-all duration-1000" style={{width: `${progressPercent}%`}}></div>
+                                </div>
+                                <span className="text-xs font-bold w-8">{progressPercent}%</span>
+                              </div>
+                            )}
+                          </td>
+                          <td className="p-5 text-center">{student.violations > 0 ? (<span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-red-500/20 text-red-600 font-black border border-red-500/30">{student.violations}</span>) : (<span className="opacity-30">-</span>)}</td>
+                          <td className="p-5 text-right">{student.isFinished ? (<span className="text-2xl font-black text-emerald-500">{student.score}</span>) : (<span className="text-sm opacity-50 italic">-</span>)}</td>
+                        </tr>
+                      )
+                    })
+                  )}
+                </tbody>
+              </table>
+            </Card>
+          </main>
+        )}
+
+      </div>
+    </div>
+  );
+};
+export default App;
+
+
